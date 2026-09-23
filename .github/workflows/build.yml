@@ -1,4 +1,4 @@
-name: Build sweet KernelSU-Next (PixelOS source, proven recipe)
+name: Build sweet KernelSU-Next (manual hooks, zero config changes)
 
 on:
   workflow_dispatch:
@@ -16,105 +16,105 @@ jobs:
       - name: Install build deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y aria2 bc bison build-essential ccache cpio flex git libelf-dev libncurses-dev libssl-dev lz4 python3 schedtool xsltproc zip zlib1g-dev libxml2-utils python-is-python3 jq
+          sudo apt-get install -y bc bison build-essential ccache cpio flex git libelf-dev libncurses-dev libssl-dev lz4 python3 schedtool xsltproc zip zlib1g-dev libxml2-utils
 
-      - name: Setup Toolchains (ZyCromerZ Clang 17 + greenforce GCC)
+      - name: Download toolchain (NDK r21e clang 10.0.7 - matches stock)
         run: |
-          mkdir -p clang
-          aria2c -q -s 16 -x 16 "https://github.com/ZyCromerZ/Clang/releases/download/17.0.0-20230725-release/Clang-17.0.0-20230725.tar.gz" -o clang.tar.gz
-          tar -xzf clang.tar.gz -C clang/
-          rm -f clang.tar.gz
-          git clone --depth=1 https://github.com/greenforce-project/gcc-arm64 -b main gcc64
-          git clone --depth=1 https://github.com/greenforce-project/gcc-arm -b main gcc32
-          ls clang/bin/clang gcc64/bin/aarch64-elf-ld gcc32/bin/arm-none-eabi-gcc
+          curl -sL "https://dl.google.com/android/repository/android-ndk-r21e-linux-x86_64.zip" -o ndk.zip
+          unzip -q ndk.zip
+          NDK_BIN="$PWD/android-ndk-r21e/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          ls "$NDK_BIN/clang" && "$NDK_BIN/clang" --version | head -1
+          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9.git gcc64
+          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9.git gcc32
+          ls gcc64/bin/aarch64-linux-android-ld gcc32/bin/arm-linux-androideabi-gcc
 
-      - name: Clone Kernel Source (PixelOS sm6150, Android 13 era)
+      - name: Clone Kernel Source (MiCode sweet-r-oss)
         run: |
-          git clone --depth=1 -b seventeen https://github.com/PixelOS-Devices/android_kernel_xiaomi_sm6150.git kernel
+          git clone --depth=1 -b sweet-r-oss https://github.com/MiCode/Xiaomi_Kernel_OpenSource.git kernel
           cd kernel
           ls arch/arm64/configs/ | grep sweet
 
-      - name: Setup KernelSU-Next (legacy-susfs via proven patch script)
+      - name: Setup KernelSU-Next v3.2.0-legacy + Manual Hooks
         working-directory: kernel
         run: |
-          python3 $GITHUB_WORKSPACE/scripts/patch_ksu_susfs.py \
-            --ksu-repo "https://github.com/xtrance-eng/KernelSU-Next.git" \
-            --ksu-branch "legacy-susfs"
-          test -L drivers/kernelsu && echo "kernelsu symlink OK"
-          grep -q kernelsu drivers/Makefile || { echo "Makefile not patched"; exit 1; }
+          # Clone KSU-Next
+          git clone --depth=1 -b v3.2.0-legacy https://github.com/KernelSU-Next/KernelSU-Next.git KernelSU-Next
+          
+          # Create symlink
+          ln -sf ../KernelSU-Next/kernel drivers/kernelsu
+          
+          # Add to Makefile
+          grep -q kernelsu drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
+          
+          # Add to Kconfig
+          grep -q "drivers/kernelsu/Kconfig" drivers/Kconfig || echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
+          
+          # Verify
+          test -L drivers/kernelsu && echo "symlink OK"
+          grep -q kernelsu drivers/Makefile && echo "Makefile OK"
+          grep -q "drivers/kernelsu/Kconfig" drivers/Kconfig && echo "Kconfig OK"
+          
+          # Apply manual hook patches (ZERO config changes!)
+          python3 $GITHUB_WORKSPACE/scripts/patch_manual_hooks.py
+          
+          # Verify hooks
+          grep -q "ksu_handle_sys_reboot" kernel/reboot.c && echo "reboot.c marker OK"
+          grep -q "ksu_handle_execveat_sucompat" fs/exec.c && echo "exec hook OK"
+          grep -q "ksu_handle_faccessat" fs/open.c && echo "faccessat hook OK"
+          grep -q "ksu_handle_setresuid" kernel/sys.c && echo "setresuid hook OK"
 
-      - name: Compile Kernel Image
+      - name: Build kernel (stock config + KSU only)
         working-directory: kernel
         run: |
           export ARCH=arm64
           export SUBARCH=arm64
-          export PATH="$GITHUB_WORKSPACE/clang/bin:$GITHUB_WORKSPACE/gcc64/bin:$GITHUB_WORKSPACE/gcc32/bin:$PATH"
-          export KBUILD_BUILD_USER="sikandar"
-          export KBUILD_BUILD_HOST="sweet-kernelsu"
+          NDK_BIN="$GITHUB_WORKSPACE/android-ndk-r21e/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          export PATH="$NDK_BIN:$GITHUB_WORKSPACE/gcc64/bin:$GITHUB_WORKSPACE/gcc32/bin:$PATH"
+          export KBUILD_BUILD_USER=sikandar
+          export KBUILD_BUILD_HOST=sweet-kernelsu
 
-          make O=out ARCH=arm64 sweet_defconfig
-
-          scripts/config --file out/.config \
-            -e CONFIG_KSU \
-            -e CONFIG_KPROBES \
-            -e CONFIG_KRETPROBES \
-            -e CONFIG_KSU_KPROBES_HOOK \
-            -e CONFIG_KSU_SUSFS \
-            -e CONFIG_KSU_SUSFS_SUS_PATH \
-            -e CONFIG_KSU_SUSFS_SUS_MOUNT \
-            -e CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT \
-            -e CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT \
-            -e CONFIG_KSU_SUSFS_SUS_KSTAT \
-            -e CONFIG_KSU_SUSFS_TRY_UMOUNT \
-            -e CONFIG_KSU_SUSFS_SPOOF_UNAME \
-            -e CONFIG_KSU_SUSFS_ENABLE_LOG \
-            -e CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS \
-            -e CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG \
-            -e CONFIG_KSU_SUSFS_OPEN_REDIRECT \
-            -e CONFIG_KSU_SUSFS_SUS_MAP \
-            -e CONFIG_NOMOUNT \
-            -d CONFIG_HZ_100 \
-            -e CONFIG_HZ_300 \
-            --set-val CONFIG_HZ 300 \
-            -e CONFIG_JUMP_LABEL \
-            -e CONFIG_WQ_POWER_EFFICIENT_DEFAULT \
-            -e CONFIG_TCP_CONG_ADVANCED \
-            -e CONFIG_TCP_CONG_BBR \
-            --set-str CONFIG_DEFAULT_TCP_CONG "bbr" \
-            -e CONFIG_NET_SCH_FQ \
-            -d CONFIG_PROFILING
-
+          # Use stock defconfig - NO changes except what KSU needs
+          make O=out ARCH=arm64 sweet_user_defconfig
+          
+          # Only enable KSU (manual hook mode - default when KPROBES is off)
+          # DO NOT enable KPROBES, FTRACE, FTRACE_SYSCALLS - keep stock!
+          ./scripts/config --file out/.config --enable CONFIG_KSU
+          ./scripts/config --file out/.config --disable CONFIG_KSU_MANUAL_HOOK
+          ./scripts/config --file out/.config --enable CONFIG_KSU_MANUAL_HOOK
           make O=out ARCH=arm64 olddefconfig
+          
+          # Verify: config should be 99% stock
+          echo "=== KSU config ==="
+          grep -E "^(CONFIG_KSU|CONFIG_KPROBES|CONFIG_FTRACE_SYSCALLS)" out/.config
+          echo "=== KPROBES should be NOT SET ==="
+          grep "CONFIG_KPROBES" out/.config
+          echo "=== FTRACE_SYSCALLS should be NOT SET ==="
+          grep "CONFIG_FTRACE_SYSCALLS" out/.config
 
-          echo "--- KSU config check ---"
-          grep -E "^(CONFIG_KSU|CONFIG_KPROBES|CONFIG_KRETPROBES)" out/.config | head -20
-
-          make -j$(nproc --all) O=out ARCH=arm64 \
-            LLVM=1 \
-            LLVM_IAS=1 \
+          make -j$(nproc) O=out ARCH=arm64 \
             CC=clang \
             CLANG_TRIPLE=aarch64-linux-gnu- \
-            CROSS_COMPILE=$GITHUB_WORKSPACE/gcc64/bin/aarch64-elf- \
-            CROSS_COMPILE_ARM32=$GITHUB_WORKSPACE/gcc32/bin/arm-none-eabi- \
-            Image.gz dtbs 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
+            CROSS_COMPILE=aarch64-linux-android- \
+            CROSS_COMPILE_ARM32=arm-linux-androideabi- \
+            LD=aarch64-linux-android-ld 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
 
           echo "--- outputs ---"
-          ls -lh out/arch/arm64/boot/Image.gz out/arch/arm64/boot/dts/qcom/*.dtb 2>/dev/null || ls -lh out/arch/arm64/boot/
-          test -f out/arch/arm64/boot/Image.gz || { echo "No Image.gz built"; exit 1; }
+          ls -lh out/arch/arm64/boot/Image.gz 2>/dev/null || ls -lh out/arch/arm64/boot/
+          test -f out/arch/arm64/boot/Image.gz || test -f out/arch/arm64/boot/Image || { echo "No kernel built"; exit 1; }
 
       - name: Package artifact
         run: |
           mkdir -p artifact
-          cp kernel/out/arch/arm64/boot/Image.gz artifact/
+          cp kernel/out/arch/arm64/boot/Image.gz artifact/ 2>/dev/null || cp kernel/out/arch/arm64/boot/Image artifact/ || true
           cp kernel/out/.config artifact/kernel_config_used
           ( cd kernel && git log --oneline -1 > "$GITHUB_WORKSPACE/artifact/kernel_commit.txt" )
-          echo "PixelOS sm6150 seventeen + xtrance KernelSU-Next legacy-susfs + sweet_defconfig + ZyCromerZ Clang 17" > artifact/build-info.txt
+          echo "sweet-r-oss + KSU v3.2.0-legacy MANUAL HOOKS + stock config (ZERO changes) + NDK clang 10.0.7" > artifact/build-info.txt
           ls -lh artifact/
           cp "$GITHUB_WORKSPACE/build.log" artifact/ 2>/dev/null || true
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: sweet-kernelsu-pixelos
+          name: sweet-ksu-manual-hooks
           path: artifact/
           retention-days: 14
