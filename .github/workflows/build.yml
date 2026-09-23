@@ -54,10 +54,12 @@ jobs:
           grep -q 'drivers/kernelsu/Kconfig' drivers/Kconfig || echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
           grep -q kernelsu drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
           make O=out ARCH=arm64 "$DEFCONFIG"
+          ./scripts/config --file out/.config --enable CONFIG_KPROBES
           ./scripts/config --file out/.config --enable CONFIG_KSU
           make O=out ARCH=arm64 olddefconfig
-          echo "--- KSU lines in .config ---"
-          grep -E "KSU" out/.config || true
+          echo "--- KSU/KPROBES lines in .config ---"
+          grep -E "^(# )?CONFIG_(KSU|KPROBES|KSU_DEBUG)" out/.config || true
+          grep -Eq "^CONFIG_KPROBES=y$" out/.config || { echo "CONFIG_KPROBES not set"; exit 1; }
           grep -Eq "^CONFIG_KSU=[ym]$" out/.config || { echo "CONFIG_KSU not set"; exit 1; }
 
       - name: Download toolchains (clang-r353983c + gcc 4.9)
