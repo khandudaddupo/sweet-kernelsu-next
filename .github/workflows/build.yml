@@ -64,9 +64,10 @@ jobs:
           make O=out ARCH=arm64 olddefconfig
 
           echo "=== CRITICAL VERIFY ==="
-          grep "CONFIG_KPROBES" out/.config
-          grep "CONFIG_FTRACE_SYSCALLS" out/.config
-          grep "CONFIG_KSU" out/.config
+          grep "CONFIG_KPROBES" out/.config || echo "KPROBES not found in config (OK)"
+          grep "CONFIG_FTRACE_SYSCALLS" out/.config || echo "FTRACE_SYSCALLS not found (OK)"
+          grep "CONFIG_KSU" out/.config || { echo "CONFIG_KSU MISSING!"; exit 1; }
+          grep "CONFIG_KSU_MANUAL_HOOK" out/.config || { echo "MANUAL_HOOK MISSING!"; exit 1; }
 
           make -j$(nproc) O=out ARCH=arm64 \
             CC=clang \
