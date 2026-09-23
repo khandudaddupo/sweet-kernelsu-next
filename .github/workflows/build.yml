@@ -55,11 +55,14 @@ jobs:
           grep -q kernelsu drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
           make O=out ARCH=arm64 "$DEFCONFIG"
           ./scripts/config --file out/.config --enable CONFIG_KPROBES
+          ./scripts/config --file out/.config --enable CONFIG_KRETPROBES
           ./scripts/config --file out/.config --enable CONFIG_KSU
           make O=out ARCH=arm64 olddefconfig
           echo "--- KSU/KPROBES lines in .config ---"
-          grep -E "^(# )?CONFIG_(KSU|KPROBES|KSU_DEBUG)" out/.config || true
+          grep -E "^(# )?CONFIG_(KSU|KPROBES|KRETPROBES|KSU_DEBUG|KSU_KPROBES_HOOK|KSU_MANUAL_HOOK)" out/.config || true
           grep -Eq "^CONFIG_KPROBES=y$" out/.config || { echo "CONFIG_KPROBES not set"; exit 1; }
+          grep -Eq "^CONFIG_KRETPROBES=y$" out/.config || { echo "CONFIG_KRETPROBES not set"; exit 1; }
+          grep -Eq "^CONFIG_KSU_KPROBES_HOOK=y$" out/.config || { echo "KSU_KPROBES_HOOK not set"; exit 1; }
           grep -Eq "^CONFIG_KSU=[ym]$" out/.config || { echo "CONFIG_KSU not set"; exit 1; }
 
       - name: Download toolchains (Proton Clang + GCC 4.9)
