@@ -70,12 +70,17 @@ jobs:
           grep -Eq "^CONFIG_KSU_KPROBES_HOOK=y$" out/.config || { echo "KSU_KPROBES_HOOK not set"; exit 1; }
           grep -Eq "^CONFIG_KSU=[ym]$" out/.config || { echo "CONFIG_KSU not set"; exit 1; }
 
-      - name: Download toolchains (Proton Clang + GCC 4.9)
+      - name: Download toolchain (NDK r21e clang 10.0.7 — matches stock build)
         run: |
-          git clone --depth=1 https://github.com/kdrag0n/proton-clang.git proton-clang
+          curl -sL "https://dl.google.com/android/repository/android-ndk-r21e-linux-x86_64.zip" -o ndk.zip
+          unzip -q ndk.zip
+          NDK_BIN="$PWD/android-ndk-r21e/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          ls "$NDK_BIN/clang" "$NDK_BIN/ld.lld" 2>&1
+          "$NDK_BIN/clang" --version | head -2
+          # GCC for CROSS_COMPILE (ld + scripts)
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9.git gcc64
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9.git gcc32
-          ls proton-clang/bin/clang gcc64/bin/aarch64-linux-android-gcc gcc32/bin/arm-linux-androideabi-gcc
+          ls gcc64/bin/aarch64-linux-android-ld gcc32/bin/arm-linux-androideabi-gcc
 
       - name: Build kernel
         working-directory: kernel
@@ -83,7 +88,9 @@ jobs:
           export ARCH=arm64
           export SUBARCH=arm64
           TC="$GITHUB_WORKSPACE"
-          export PATH="$TC/proton-clang/bin:$TC/gcc64/bin:$TC/gcc32/bin:$PATH"
+          NDK_BIN="$TC/android-ndk-r21e/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          export PATH="$NDK_BIN:$TC/gcc64/bin:$TC/gcc32/bin:$PATH"
+          clang --version | head -1
           export KBUILD_BUILD_USER=builder
           export KBUILD_BUILD_HOST=github-actions
           make -j"$(nproc)" O=out ARCH=arm64 \
