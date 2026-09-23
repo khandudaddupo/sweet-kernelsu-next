@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       ksu_tag:
-        description: "KernelSU-Next tag (e.g. v3.4.0)"
+        description: "KernelSU-Next tag (e.g. v3.2.0-legacy)"
         required: false
-        default: "v3.4.0"
+        default: "v3.2.0-legacy"
   push:
     branches: [ main ]
 
@@ -15,7 +15,7 @@ env:
   KERNEL_BRANCH: sweet-r-oss
   DEFCONFIG: sweet_user_defconfig
   ARCH: arm64
-  KSU_TAG_DEFAULT: v3.4.0
+  KSU_TAG_DEFAULT: v3.2.0-legacy
 
 jobs:
   build:

@@ -1,7 +1,7 @@
 # sweet-kernelsu-next
 
 Redmi Note 10 Pro (`sweet` / `sweetin`, M2101K6P) custom kernel:
-stock Xiaomi `sweet-r-oss` (`sweet_user_defconfig`, 4.14) + KernelSU-Next (default `v3.4.0`).
+stock Xiaomi `sweet-r-oss` (`sweet_user_defconfig`, 4.14) + KernelSU-Next (default `v3.2.0-legacy`).
 
 ## Build
 
