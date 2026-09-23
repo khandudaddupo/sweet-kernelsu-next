@@ -18,16 +18,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y bc bison build-essential ccache cpio flex git libelf-dev libncurses-dev libssl-dev lz4 python3 schedtool xsltproc zip zlib1g-dev libxml2-utils
 
-      - name: Download toolchain (ZyCromerZ Clang 17 - works with PixelOS source)
+      - name: Download toolchains (ZyCromerZ Clang 17 + greenforce GCC)
         run: |
           sudo apt-get install -y aria2
           mkdir -p clang
           aria2c -q -s 16 -x 16 "https://github.com/ZyCromerZ/Clang/releases/download/17.0.0-20230725-release/Clang-17.0.0-20230725.tar.gz" -o clang.tar.gz
           tar -xzf clang.tar.gz -C clang/
-          ls clang/bin/clang && clang/bin/clang --version | head -1
-          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9.git gcc64
-          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9.git gcc32
-          ls gcc64/bin/aarch64-linux-android-ld
+          rm -f clang.tar.gz
+          git clone --depth=1 https://github.com/greenforce-project/gcc-arm64 -b main gcc64
+          git clone --depth=1 https://github.com/greenforce-project/gcc-arm -b main gcc32
+          ls clang/bin/clang gcc64/bin/aarch64-elf-ld gcc32/bin/arm-none-eabi-gcc
 
       - name: Clone Kernel Source (PixelOS sm6150 Android 13 = DTB era match)
         run: |
@@ -71,11 +71,13 @@ jobs:
           grep "CONFIG_KSU_MANUAL_HOOK" out/.config || { echo "MANUAL_HOOK MISSING!"; exit 1; }
 
           make -j$(nproc) O=out ARCH=arm64 \
+            LLVM=1 \
+            LLVM_IAS=1 \
             CC=clang \
             CLANG_TRIPLE=aarch64-linux-gnu- \
-            CROSS_COMPILE=aarch64-linux-android- \
-            CROSS_COMPILE_ARM32=arm-linux-androideabi- \
-            LD=aarch64-linux-android-ld 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
+            CROSS_COMPILE=$GITHUB_WORKSPACE/gcc64/bin/aarch64-elf- \
+            CROSS_COMPILE_ARM32=$GITHUB_WORKSPACE/gcc32/bin/arm-none-eabi- \
+            Image.gz 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
 
           test -f out/arch/arm64/boot/Image.gz && echo "Image.gz OK" || ls out/arch/arm64/boot/
 
@@ -84,7 +86,7 @@ jobs:
           mkdir -p artifact
           cp kernel/out/arch/arm64/boot/Image.gz artifact/
           cp kernel/out/.config artifact/kernel_config_used
-          echo "PixelOS sm6150 seventeen (Android 13) + KSU v3.2.0-legacy MANUAL HOOKS + sweet_defconfig + ZyCromerZ Clang 17" > artifact/build-info.txt
+          echo "PixelOS sm6150 seventeen (Android 13) + KSU v3.2.0-legacy MANUAL HOOKS + sweet_defconfig + ZyCromerZ Clang 17 + greenforce GCC + LLVM=1" > artifact/build-info.txt
           cp "$GITHUB_WORKSPACE/build.log" artifact/ 2>/dev/null || true
 
       - name: Upload artifact
