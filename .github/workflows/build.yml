@@ -26,7 +26,7 @@ jobs:
           rm -f clang.tar.gz
           git clone --depth=1 https://github.com/greenforce-project/gcc-arm64 -b main gcc64
           git clone --depth=1 https://github.com/greenforce-project/gcc-arm -b main gcc32
-          ls clang/bin/clang gcc64/bin/aarch64-elf-ld gcc32/bin/arm-eabi-gcc
+          ls clang/bin/clang gcc64/bin/aarch64-elf-ld gcc32/bin/arm-none-eabi-gcc
 
       - name: Clone Kernel Source (PixelOS sm6150, Android 13 era)
         run: |
@@ -95,7 +95,7 @@ jobs:
             CC=clang \
             CLANG_TRIPLE=aarch64-linux-gnu- \
             CROSS_COMPILE=$GITHUB_WORKSPACE/gcc64/bin/aarch64-elf- \
-            CROSS_COMPILE_ARM32=$GITHUB_WORKSPACE/gcc32/bin/arm-eabi- \
+            CROSS_COMPILE_ARM32=$GITHUB_WORKSPACE/gcc32/bin/arm-none-eabi- \
             Image.gz dtbs 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
 
           echo "--- outputs ---"
