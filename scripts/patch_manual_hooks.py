@@ -120,7 +120,8 @@ int path_umount(struct path *path, int flags)
             c = c[:line_end+1] + decl + c[line_end+1:]
 
         # Find the reboot syscall and add the ACTUAL function call at the beginning of body
-        anchor = "SYSCALL_DEFINE4(reboot, int, magic1, int, magic2, unsigned int, cmd, void __user *, arg)"
+        # Handle both single-line and multi-line SYSCALL_DEFINE4 formats
+        anchor = "SYSCALL_DEFINE4(reboot, int, magic1, int, magic2, unsigned int, cmd,"
         hook_call = "\tksu_handle_sys_reboot(magic1, magic2, cmd, &arg);\n"
         if anchor in c:
             brace_pos = c.find("{", c.find(anchor))
