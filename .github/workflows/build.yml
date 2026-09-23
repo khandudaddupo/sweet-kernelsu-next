@@ -18,12 +18,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y bc bison build-essential ccache cpio flex git libelf-dev libncurses-dev libssl-dev lz4 python3 schedtool xsltproc zip zlib1g-dev libxml2-utils
 
-      - name: Download toolchain (NDK r21e clang 10.0.7)
+      - name: Download toolchain (ZyCromerZ Clang 17 - works with PixelOS source)
         run: |
-          curl -sL "https://dl.google.com/android/repository/android-ndk-r21e-linux-x86_64.zip" -o ndk.zip
-          unzip -q ndk.zip
-          NDK_BIN="$PWD/android-ndk-r21e/toolchains/llvm/prebuilt/linux-x86_64/bin"
-          "$NDK_BIN/clang" --version | head -1
+          sudo apt-get install -y aria2
+          mkdir -p clang
+          aria2c -q -s 16 -x 16 "https://github.com/ZyCromerZ/Clang/releases/download/17.0.0-20230725-release/Clang-17.0.0-20230725.tar.gz" -o clang.tar.gz
+          tar -xzf clang.tar.gz -C clang/
+          ls clang/bin/clang && clang/bin/clang --version | head -1
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9.git gcc64
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9.git gcc32
           ls gcc64/bin/aarch64-linux-android-ld
@@ -50,8 +51,8 @@ jobs:
         run: |
           export ARCH=arm64
           export SUBARCH=arm64
-          NDK_BIN="$GITHUB_WORKSPACE/android-ndk-r21e/toolchains/llvm/prebuilt/linux-x86_64/bin"
-          export PATH="$NDK_BIN:$GITHUB_WORKSPACE/gcc64/bin:$GITHUB_WORKSPACE/gcc32/bin:$PATH"
+          export PATH="$GITHUB_WORKSPACE/clang/bin:$GITHUB_WORKSPACE/gcc64/bin:$GITHUB_WORKSPACE/gcc32/bin:$PATH"
+          clang --version | head -1
           export KBUILD_BUILD_USER=sikandar
           export KBUILD_BUILD_HOST=sweet-kernelsu
 
@@ -83,7 +84,7 @@ jobs:
           mkdir -p artifact
           cp kernel/out/arch/arm64/boot/Image.gz artifact/
           cp kernel/out/.config artifact/kernel_config_used
-          echo "PixelOS sm6150 seventeen (Android 13) + KSU v3.2.0-legacy MANUAL HOOKS + sweet_defconfig + NDK clang 10" > artifact/build-info.txt
+          echo "PixelOS sm6150 seventeen (Android 13) + KSU v3.2.0-legacy MANUAL HOOKS + sweet_defconfig + ZyCromerZ Clang 17" > artifact/build-info.txt
           cp "$GITHUB_WORKSPACE/build.log" artifact/ 2>/dev/null || true
 
       - name: Upload artifact
