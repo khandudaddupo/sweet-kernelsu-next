@@ -106,28 +106,37 @@ int path_umount(struct path *path, int flags)
         else:
             print("[-] fs/internal.h already has path_umount")
 
-    # ============ 1. kernel/reboot.c - marker (Kbuild check) ============
-    # The Kbuild does: grep -q "ksu_handle_sys_reboot" kernel/reboot.c
-    # We add it as a comment in the SYSCALL_DEFINE4(reboot,...) function
+    # ============ 1. kernel/reboot.c - ACTUAL FUNCTION CALL (supercall hook) ============
+    # KSU supercall goes through reboot syscall - MUST be intercepted!
     reboot = "kernel/reboot.c"
     with open(reboot, "r") as f:
         c = f.read()
-    if "ksu_handle_sys_reboot" not in c:
-        # Add marker comment near the reboot syscall
+    if "ksu_handle_sys_reboot" not in c or "extern int ksu_handle_sys_reboot" not in c:
+        # Add extern declaration after includes
+        decl = "\nextern int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd, void __user **arg);\n"
+        last_inc = c.rfind("#include")
+        if last_inc > 0:
+            line_end = c.find("\n", last_inc)
+            c = c[:line_end+1] + decl + c[line_end+1:]
+
+        # Find the reboot syscall and add the ACTUAL function call at the beginning of body
         anchor = "SYSCALL_DEFINE4(reboot, int, magic1, int, magic2, unsigned int, cmd, void __user *, arg)"
+        hook_call = "\tksu_handle_sys_reboot(magic1, magic2, cmd, &arg);\n"
         if anchor in c:
-            c = c.replace(anchor, "/* ksu_handle_sys_reboot: KernelSU manual hook marker */\n" + anchor, 1)
-            with open(reboot, "w") as f:
-                f.write(c)
-            print("[+] Added ksu_handle_sys_reboot marker in kernel/reboot.c")
+            brace_pos = c.find("{", c.find(anchor))
+            if brace_pos > 0:
+                c = c[:brace_pos+1] + "\n" + hook_call + c[brace_pos+1:]
+                print("[+] Added ksu_handle_sys_reboot CALL in kernel/reboot.c SYSCALL_DEFINE4")
+            else:
+                print("[!] Could not find opening brace for reboot syscall")
+                ok = False
         else:
-            # fallback: add at top of file
-            c = "/* ksu_handle_sys_reboot: KernelSU manual hook marker */\n" + c
-            with open(reboot, "w") as f:
-                f.write(c)
-            print("[+] Added ksu_handle_sys_reboot marker at top of kernel/reboot.c")
+            print("[!] Could not find reboot syscall anchor")
+            ok = False
+        with open(reboot, "w") as f:
+            f.write(c)
     else:
-        print("[-] kernel/reboot.c already has marker")
+        print("[-] kernel/reboot.c already has supercall hook")
 
     # ============ 2. fs/exec.c - su execution hook ============
     exec_c = "fs/exec.c"
