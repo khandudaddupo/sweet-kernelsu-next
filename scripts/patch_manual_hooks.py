@@ -32,6 +32,80 @@ def patch_file(path, patches, must_exist=True):
 def main():
     ok = True
 
+    # ============ 0. fs/namespace.c - path_umount (KSU umount feature) ============
+    ns_file = "fs/namespace.c"
+    if os.path.exists(ns_file):
+        with open(ns_file, "r") as f:
+            content = f.read()
+        if "int path_umount" not in content:
+            patch_ns = """static int can_umount(const struct path *path, int flags)
+{
+\tstruct mount *mnt = real_mount(path->mnt);
+\tif (flags & ~(MNT_FORCE | MNT_DETACH | MNT_EXPIRE | UMOUNT_NOFOLLOW))
+\t\treturn -EINVAL;
+\tif (!may_mount())
+\t\treturn -EPERM;
+\tif (path->dentry != path->mnt->mnt_root)
+\t\treturn -EINVAL;
+\tif (!check_mnt(mnt))
+\t\treturn -EINVAL;
+\tif (mnt->mnt.mnt_flags & MNT_LOCKED)
+\t\treturn -EINVAL;
+\tif (flags & MNT_FORCE && !capable(CAP_SYS_ADMIN))
+\t\treturn -EPERM;
+\treturn 0;
+}
+
+int path_umount(struct path *path, int flags)
+{
+\tstruct mount *mnt = real_mount(path->mnt);
+\tint ret;
+\tret = can_umount(path, flags);
+\tif (!ret)
+\t\tret = do_umount(mnt, flags);
+\tdput(path->dentry);
+\tmntput_no_expire(mnt);
+\treturn ret;
+}
+
+"""
+            if "static bool is_mnt_ns_file" in content:
+                content = content.replace("static bool is_mnt_ns_file", patch_ns + "static bool is_mnt_ns_file", 1)
+                with open(ns_file, "w") as f:
+                    f.write(content)
+                print("[+] Patched fs/namespace.c with path_umount")
+            else:
+                # Alternative anchor
+                anchor = "static int do_umount(struct mount *mnt, int flags)"
+                if anchor in content:
+                    content = content.replace(anchor, patch_ns + anchor, 1)
+                    with open(ns_file, "w") as f:
+                        f.write(content)
+                    print("[+] Patched fs/namespace.c with path_umount (alt anchor)")
+                else:
+                    print("[!] Could not find anchor in fs/namespace.c")
+        else:
+            print("[-] fs/namespace.c already has path_umount")
+
+    # fs/internal.h - declaration
+    hdr_file = "fs/internal.h"
+    if os.path.exists(hdr_file):
+        with open(hdr_file, "r") as f:
+            content = f.read()
+        if "int path_umount" not in content:
+            if "extern void __init mnt_init(void);" in content:
+                content = content.replace(
+                    "extern void __init mnt_init(void);",
+                    "extern void __init mnt_init(void);\nint path_umount(struct path *path, int flags);",
+                    1)
+                with open(hdr_file, "w") as f:
+                    f.write(content)
+                print("[+] Patched fs/internal.h with path_umount declaration")
+            else:
+                print("[!] Could not find anchor in fs/internal.h")
+        else:
+            print("[-] fs/internal.h already has path_umount")
+
     # ============ 1. kernel/reboot.c - marker (Kbuild check) ============
     # The Kbuild does: grep -q "ksu_handle_sys_reboot" kernel/reboot.c
     # We add it as a comment in the SYSCALL_DEFINE4(reboot,...) function
