@@ -91,7 +91,7 @@ jobs:
             CLANG_TRIPLE=aarch64-linux-gnu- \
             CROSS_COMPILE=aarch64-linux-android- \
             CROSS_COMPILE_ARM32=arm-linux-androideabi- \
-            NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip LD=ld.lld 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
+            LD=aarch64-linux-android-ld 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
           echo "--- outputs ---"
           ls -lh out/arch/arm64/boot/ || true
           test -f out/arch/arm64/boot/Image.gz || test -f out/arch/arm64/boot/Image || { echo "No kernel image built"; exit 1; }
