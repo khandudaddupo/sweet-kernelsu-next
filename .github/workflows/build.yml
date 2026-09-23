@@ -1,0 +1,106 @@
+name: Build sweet KernelSU-Next
+
+on:
+  workflow_dispatch:
+    inputs:
+      ksu_tag:
+        description: "KernelSU-Next tag (e.g. v3.4.0)"
+        required: false
+        default: "v3.4.0"
+  push:
+    branches: [ main ]
+
+env:
+  KERNEL_REPO: https://github.com/MiCode/Xiaomi_Kernel_OpenSource.git
+  KERNEL_BRANCH: sweet-r-oss
+  DEFCONFIG: sweet_user_defconfig
+  ARCH: arm64
+  KSU_TAG_DEFAULT: v3.4.0
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+    steps:
+      - name: Checkout build repo
+        uses: actions/checkout@v4
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bc bison build-essential ccache cpio flex git libelf-dev libncurses-dev libssl-dev lz4 python3 schedtool xsltproc zip zlib1g-dev libxml2-utils
+
+      - name: Clone stock kernel (sweet-r-oss)
+        run: |
+          git clone --depth=1 --branch "$KERNEL_BRANCH" "$KERNEL_REPO" kernel
+          cd kernel
+          git log --oneline -1
+          ls arch/arm64/configs/ | grep -i sweet
+
+      - name: Integrate KernelSU-Next
+        working-directory: kernel
+        run: |
+          KSU_TAG="${{ github.event.inputs.ksu_tag || env.KSU_TAG_DEFAULT }}"
+          echo "KSU tag: $KSU_TAG"
+          curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -s "$KSU_TAG"
+          test -L drivers/kernelsu && echo "kernelsu symlink OK" && ls drivers/kernelsu | head
+          grep -q kernelsu drivers/Makefile || { echo "Makefile not patched"; exit 1; }
+          grep -q "drivers/kernelsu/Kconfig" drivers/Kconfig || { echo "Kconfig not patched"; exit 1; }
+
+      - name: Enable CONFIG_KSU
+        working-directory: kernel
+        run: |
+          make O=out ARCH=arm64 "$DEFCONFIG"
+          ./scripts/config --file out/.config --enable CONFIG_KSU
+          make O=out ARCH=arm64 olddefconfig
+          grep -E "^CONFIG_KSU=" out/.config || { echo "CONFIG_KSU not set"; exit 1; }
+
+      - name: Download toolchains (clang-r353983c + gcc 4.9)
+        run: |
+          mkdir -p toolchains && cd toolchains
+          curl -sL "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android-11-release/clang-r353983c.tar.gz" -o clang.tar.gz
+          mkdir -p clang-r353983c && tar -xf clang.tar.gz -C clang-r353983c
+          curl -sL "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/refs/tags/android-11.0.0_r48.tar.gz" -o gcc64.tar.gz
+          mkdir -p gcc64 && tar -xf gcc64.tar.gz -C gcc64
+          curl -sL "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9/+archive/refs/tags/android-11.0.0_r48.tar.gz" -o gcc32.tar.gz
+          mkdir -p gcc32 && tar -xf gcc32.tar.gz -C gcc32
+          ls clang-r353983c/bin/clang gcc64/bin/aarch64-linux-android-gcc gcc32/bin/arm-linux-androideabi-gcc
+
+      - name: Build kernel
+        working-directory: kernel
+        run: |
+          export ARCH=arm64
+          export SUBARCH=arm64
+          TC="$GITHUB_WORKSPACE/toolchains"
+          export PATH="$TC/clang-r353983c/bin:$TC/gcc64/bin:$TC/gcc32/bin:$PATH"
+          export KBUILD_BUILD_USER=builder
+          export KBUILD_BUILD_HOST=github-actions
+          make -j"$(nproc)" O=out ARCH=arm64 \
+            CC=clang \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            CROSS_COMPILE=aarch64-linux-android- \
+            CROSS_COMPILE_ARM32=arm-linux-androideabi- \
+            NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip LD=ld.lld 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
+          echo "--- outputs ---"
+          ls -lh out/arch/arm64/boot/ || true
+          test -f out/arch/arm64/boot/Image.gz || test -f out/arch/arm64/boot/Image || { echo "No kernel image built"; exit 1; }
+
+      - name: Package artifact
+        run: |
+          mkdir -p artifact
+          cp kernel/out/arch/arm64/boot/Image.gz artifact/ 2>/dev/null || cp kernel/out/arch/arm64/boot/Image artifact/ || true
+          cp kernel/out/arch/arm64/boot/dtb* artifact/ 2>/dev/null || true
+          cp kernel/out/arch/arm64/boot/dtbo.img artifact/ 2>/dev/null || true
+          cp kernel/out/.config artifact/kernel_config_used || true
+          ( cd kernel && git log --oneline -1 > "$GITHUB_WORKSPACE/artifact/kernel_commit.txt" )
+          echo "KSU ${{ github.event.inputs.ksu_tag || env.KSU_TAG_DEFAULT }} + sweet-r-oss + sweet_user_defconfig" > artifact/build-info.txt
+          uname -a >> artifact/build-info.txt || true
+          ls -lh artifact/
+          cp "$GITHUB_WORKSPACE/build.log" artifact/ 2>/dev/null || true
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sweet-kernelsu-next-${{ github.event.inputs.ksu_tag || env.KSU_TAG_DEFAULT }}
+          path: artifact/
+          retention-days: 14
