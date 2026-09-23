@@ -56,12 +56,17 @@ jobs:
           make O=out ARCH=arm64 "$DEFCONFIG"
           ./scripts/config --file out/.config --enable CONFIG_KPROBES
           ./scripts/config --file out/.config --enable CONFIG_KRETPROBES
+          ./scripts/config --file out/.config --enable CONFIG_FTRACE
+          ./scripts/config --file out/.config --enable CONFIG_FTRACE_SYSCALLS
           ./scripts/config --file out/.config --enable CONFIG_KSU
+          ./scripts/config --file out/.config --disable CONFIG_KSU_MANUAL_HOOK
+          ./scripts/config --file out/.config --enable CONFIG_KSU_KPROBES_HOOK
           make O=out ARCH=arm64 olddefconfig
           echo "--- KSU/KPROBES lines in .config ---"
-          grep -E "^(# )?CONFIG_(KSU|KPROBES|KRETPROBES|KSU_DEBUG|KSU_KPROBES_HOOK|KSU_MANUAL_HOOK)" out/.config || true
+          grep -E "^(# )?CONFIG_(KSU|KPROBES|KRETPROBES|FTRACE|KSU_DEBUG|KSU_KPROBES_HOOK|KSU_MANUAL_HOOK)" out/.config || true
           grep -Eq "^CONFIG_KPROBES=y$" out/.config || { echo "CONFIG_KPROBES not set"; exit 1; }
           grep -Eq "^CONFIG_KRETPROBES=y$" out/.config || { echo "CONFIG_KRETPROBES not set"; exit 1; }
+          grep -Eq "^CONFIG_HAVE_SYSCALL_TRACEPOINTS=y$" out/.config || { echo "HAVE_SYSCALL_TRACEPOINTS not set"; exit 1; }
           grep -Eq "^CONFIG_KSU_KPROBES_HOOK=y$" out/.config || { echo "KSU_KPROBES_HOOK not set"; exit 1; }
           grep -Eq "^CONFIG_KSU=[ym]$" out/.config || { echo "CONFIG_KSU not set"; exit 1; }
 
