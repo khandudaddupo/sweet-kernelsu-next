@@ -22,16 +22,16 @@ def patch_init():
         c = f.read()
     if "AUTO_ENFORCE" in c:
         print("[-] init already patched"); return True
-    # Add work struct before kernelsu_init
+    # Use KSU's own getenforce/setenforce (defined in selinux/selinux.c)
     work = """
 /* AUTO_ENFORCE: enforce SELinux 30s after boot for UPI safety */
 static void ksu_enforce_work_fn(struct work_struct *w);
 static DECLARE_DELAYED_WORK(ksu_enforce_work, ksu_enforce_work_fn);
 static void ksu_enforce_work_fn(struct work_struct *w)
 {
-\tif (!security_getenforce()) {
+\tif (!getenforce()) {
 \t\tpr_info("KernelSU: AUTO_ENFORCE enforcing SELinux now\\n");
-\t\tsecurity_setenforce(1);
+\t\tsetenforce(true);
 \t}
 }
 """
