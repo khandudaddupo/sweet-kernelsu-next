@@ -45,6 +45,8 @@ jobs:
           python3 $GITHUB_WORKSPACE/scripts/patch_manual_hooks.py
           grep -q "ksu_handle_sys_reboot" kernel/reboot.c && echo "reboot marker OK"
           grep -q "ksu_handle_execveat_sucompat" fs/exec.c && echo "exec hook OK"
+          python3 $GITHUB_WORKSPACE/scripts/patch_manager_bootstrap.py
+          grep -q "BOOTSTRAP" KernelSU-Next/kernel/supercall/perm.c && echo "bootstrap OK" || { echo "bootstrap MISSING"; exit 1; }
 
       - name: Build kernel (PixelOS defconfig + KSU only, zero other changes)
         working-directory: kernel
