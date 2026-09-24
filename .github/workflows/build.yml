@@ -46,7 +46,9 @@ jobs:
           grep -q "ksu_handle_sys_reboot" kernel/reboot.c && echo "reboot marker OK"
           grep -q "ksu_handle_execveat_sucompat" fs/exec.c && echo "exec hook OK"
           python3 $GITHUB_WORKSPACE/scripts/patch_manager_bootstrap.py
-          grep -q "BOOTSTRAP" KernelSU-Next/kernel/supercall/perm.c && echo "bootstrap OK" || { echo "bootstrap MISSING"; exit 1; }
+          python3 $GITHUB_WORKSPACE/scripts/patch_getinfo_bootstrap.py
+          grep -q "BOOTSTRAP" KernelSU-Next/kernel/supercall/perm.c && echo "perm bootstrap OK" || { echo "perm bootstrap MISSING"; exit 1; }
+          grep -q "BOOTSTRAP_GET_INFO" KernelSU-Next/kernel/supercall/dispatch.c && echo "getinfo bootstrap OK" || { echo "getinfo bootstrap MISSING"; exit 1; }
 
       - name: Build kernel (PixelOS defconfig + KSU only, zero other changes)
         working-directory: kernel
