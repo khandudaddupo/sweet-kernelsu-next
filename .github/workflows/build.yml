@@ -47,8 +47,11 @@ jobs:
           grep -q "ksu_handle_execveat_sucompat" fs/exec.c && echo "exec hook OK"
           python3 $GITHUB_WORKSPACE/scripts/patch_manager_bootstrap.py
           python3 $GITHUB_WORKSPACE/scripts/patch_getinfo_bootstrap.py
+          python3 $GITHUB_WORKSPACE/scripts/patch_adb_root.py
           grep -q "BOOTSTRAP" KernelSU-Next/kernel/supercall/perm.c && echo "perm bootstrap OK" || { echo "perm bootstrap MISSING"; exit 1; }
           grep -q "BOOTSTRAP_GET_INFO" KernelSU-Next/kernel/supercall/dispatch.c && echo "getinfo bootstrap OK" || { echo "getinfo bootstrap MISSING"; exit 1; }
+          grep -q "ADB_SHELL" KernelSU-Next/kernel/supercall/perm.c && echo "adb root OK" || { echo "adb root MISSING"; exit 1; }
+          grep -q "AUTO_ENFORCE" KernelSU-Next/kernel/core/init.c && echo "auto enforce OK" || { echo "auto enforce MISSING"; exit 1; }
 
       - name: Build kernel (PixelOS defconfig + KSU only, zero other changes)
         working-directory: kernel
