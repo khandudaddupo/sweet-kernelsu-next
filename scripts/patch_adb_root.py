@@ -8,7 +8,7 @@ def patch_perm():
         c = f.read()
     if "ADB_SHELL" in c:
         print("[-] perm already patched"); return True
-    old = "bool allowed_for_su(void)"
+    old = "bool allowed_for_su(void)\n{"
     new = "bool allowed_for_su(void)\n{\n\t/* ADB_SHELL: always allow ADB shell uid 2000 */\n\tif (current_uid().val == 2000) return true;"
     if old not in c:
         print("[!] perm anchor not found"); return False
