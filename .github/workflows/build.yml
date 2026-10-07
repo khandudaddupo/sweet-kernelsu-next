@@ -50,6 +50,29 @@ jobs:
           grep -q "BOOTSTRAP" KernelSU-Next/kernel/supercall/perm.c && echo "perm bootstrap OK" || { echo "perm bootstrap MISSING"; exit 1; }
           grep -q "BOOTSTRAP_GET_INFO" KernelSU-Next/kernel/supercall/dispatch.c && echo "getinfo bootstrap OK" || { echo "getinfo bootstrap MISSING"; exit 1; }
 
+      - name: Wire ksud boot trigger (manual hooks only added sucompat; modules need the ksud stage trigger to mount)
+        working-directory: kernel
+        run: |
+          python3 - <<'PY'
+          import sys
+          f = "fs/exec.c"
+          s = open(f).read()
+          if "ksu_handle_execveat_ksud" in s:
+              print("already wired"); sys.exit(0)
+          decl = "extern int ksu_handle_execveat_sucompat(int *fd, struct filename **filename_ptr, void *argv, void *envp, int *flags);"
+          if decl not in s:
+              print("sucompat decl NOT FOUND"); sys.exit(1)
+          s = s.replace(decl, decl + "\nextern int ksu_handle_execveat_ksud(int *fd, struct filename **filename_ptr, void *argv, void *envp, int *flags);", 1)
+          call = "ksu_handle_execveat_sucompat(&fd, &filename, NULL, NULL, NULL);"
+          cnt = s.count(call)
+          if cnt == 0:
+              print("sucompat call NOT FOUND"); sys.exit(1)
+          s = s.replace(call, call + "\n\tksu_handle_execveat_ksud(&fd, &filename, &argv, &envp, &flags);")
+          open(f, "w").write(s)
+          print("wired ksud trigger at", cnt, "site(s)")
+          PY
+          grep -q "ksu_handle_execveat_ksud(&fd, &filename, &argv" fs/exec.c && echo "KSUD TRIGGER WIRED OK" || { echo "FAILED"; exit 1; }
+
       - name: Force SELinux permissive (user-build ROMs like crDroid ignore cmdline permissive)
         working-directory: kernel
         run: |
