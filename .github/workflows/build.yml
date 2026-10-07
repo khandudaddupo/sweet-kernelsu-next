@@ -73,6 +73,31 @@ jobs:
           PY
           grep -q "ksu_handle_execveat_ksud(&fd, &filename, &argv" fs/exec.c && echo "KSUD TRIGGER WIRED OK" || { echo "FAILED"; exit 1; }
 
+      - name: Wire vfs_read hook (inject init.rc so init execs ksud post-fs-data; required for modules to mount/process)
+        working-directory: kernel
+        run: |
+          python3 - <<'PY'
+          import sys
+          f = "fs/read_write.c"
+          s = open(f).read()
+          if "ksu_handle_vfs_read" in s:
+              print("already wired"); sys.exit(0)
+          anchor = "ssize_t vfs_read(struct file *file, char __user *buf, size_t count, loff_t *pos)"
+          if anchor not in s:
+              print("vfs_read anchor NOT FOUND"); sys.exit(1)
+          decl = ("extern bool ksu_init_rc_hook;\n"
+                  "extern int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr, size_t *count_ptr, loff_t **pos);\n")
+          s = s.replace(anchor, decl + anchor, 1)
+          i = s.find(anchor)
+          b = s.find("{", i)
+          if b < 0:
+              print("open brace NOT FOUND"); sys.exit(1)
+          s = s[:b+1] + "\n\tif (unlikely(ksu_init_rc_hook))\n\t\tksu_handle_vfs_read(&file, &buf, &count, &pos);" + s[b+1:]
+          open(f, "w").write(s)
+          print("wired vfs_read hook")
+          PY
+          grep -q "ksu_handle_vfs_read(&file, &buf, &count, &pos)" fs/read_write.c && echo "VFS_READ HOOK WIRED OK" || { echo "FAILED"; exit 1; }
+
       - name: Force SELinux permissive (user-build ROMs like crDroid ignore cmdline permissive)
         working-directory: kernel
         run: |
