@@ -50,6 +50,29 @@ jobs:
           grep -q "BOOTSTRAP" KernelSU-Next/kernel/supercall/perm.c && echo "perm bootstrap OK" || { echo "perm bootstrap MISSING"; exit 1; }
           grep -q "BOOTSTRAP_GET_INFO" KernelSU-Next/kernel/supercall/dispatch.c && echo "getinfo bootstrap OK" || { echo "getinfo bootstrap MISSING"; exit 1; }
 
+      - name: Force SELinux permissive (user-build ROMs like crDroid ignore cmdline permissive)
+        working-directory: kernel
+        run: |
+          python3 - <<'PY'
+          import sys
+          f = "security/selinux/selinuxfs.c"
+          s = open(f).read()
+          if "FORCE_PERMISSIVE" in s:
+              print("already patched"); sys.exit(0)
+          fi = s.find("sel_write_enforce")
+          if fi < 0:
+              print("sel_write_enforce NOT FOUND"); sys.exit(1)
+          anchor = "new_value = !!new_value;"
+          ai = s.find(anchor, fi)
+          if ai < 0:
+              print("anchor NOT FOUND in sel_write_enforce"); sys.exit(1)
+          j = ai + len(anchor)
+          s = s[:j] + "\n\tnew_value = 0; /* FORCE_PERMISSIVE: keep SELinux permissive for KSU */" + s[j:]
+          open(f, "w").write(s)
+          print("patched sel_write_enforce in", f)
+          PY
+          grep -q "FORCE_PERMISSIVE" security/selinux/selinuxfs.c && echo "FORCE_PERMISSIVE patch OK" || { echo "PERMISSIVE PATCH FAILED"; exit 1; }
+
       - name: Build kernel (PixelOS defconfig + KSU only, zero other changes)
         working-directory: kernel
         run: |
@@ -90,12 +113,12 @@ jobs:
           mkdir -p artifact
           cp kernel/out/arch/arm64/boot/Image.gz artifact/
           cp kernel/out/.config artifact/kernel_config_used
-          echo "PixelOS sm6150 seventeen (Android 13) + KSU v3.2.0-legacy MANUAL HOOKS + sweet_defconfig + ZyCromerZ Clang 17 + greenforce GCC + LLVM=1" > artifact/build-info.txt
+          echo "PixelOS sm6150 seventeen (Android 13) + KSU v3.2.0-legacy MANUAL HOOKS + FORCE_PERMISSIVE + sweet_defconfig + ZyCromerZ Clang 17 + greenforce GCC + LLVM=1" > artifact/build-info.txt
           cp "$GITHUB_WORKSPACE/build.log" artifact/ 2>/dev/null || true
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: sweet-ksu-pixelos-manual-hooks
+          name: sweet-ksu-forcepermissive
           path: artifact/
           retention-days: 14
