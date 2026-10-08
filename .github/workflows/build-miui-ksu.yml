@@ -11,20 +11,20 @@ jobs:
       - name: Checkout build repo
         uses: actions/checkout@v4
 
-      - name: Install build deps
+      - name: Install build deps (+ aarch64/arm gnu binutils for correct linker emulation)
         run: |
           sudo apt-get update
-          sudo apt-get install -y bc bison build-essential ccache cpio flex git libelf-dev libncurses-dev libssl-dev lz4 python3 schedtool xsltproc zip zlib1g-dev libxml2-utils aria2
+          sudo apt-get install -y bc bison build-essential ccache cpio flex git libelf-dev libncurses-dev libssl-dev lz4 python3 schedtool xsltproc zip zlib1g-dev libxml2-utils aria2 \
+            gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu gcc-arm-linux-gnueabi binutils-arm-linux-gnueabi
 
-      - name: Download toolchains (ZyCromerZ Clang 17 + greenforce GCC)
+      - name: Download Clang (ZyCromerZ Clang 17 — has clang + ld.lld + llvm-*)
         run: |
           mkdir -p clang
           aria2c -q -s 16 -x 16 "https://github.com/ZyCromerZ/Clang/releases/download/17.0.0-20230725-release/Clang-17.0.0-20230725.tar.gz" -o clang.tar.gz
           tar -xzf clang.tar.gz -C clang/
           rm -f clang.tar.gz
-          git clone --depth=1 https://github.com/greenforce-project/gcc-arm64 -b main gcc64
-          git clone --depth=1 https://github.com/greenforce-project/gcc-arm -b main gcc32
           clang/bin/clang --version | head -1
+          clang/bin/ld.lld --version | head -1
 
       - name: Clone MiCode sweet-r-oss (official MIUI 12.5 / Android 11 source, 4.14.180)
         run: |
@@ -37,13 +37,10 @@ jobs:
         working-directory: kernel
         run: |
           curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/v1.0.9/kernel/setup.sh" | bash -s v1.0.9
-          echo "=== KSU-Next version ==="
-          cat KernelSU-Next/kernel/Makefile 2>/dev/null | grep -i version | head || true
-          # ensure driver wired into build
           grep -q kernelsu drivers/Makefile && echo "drivers/Makefile wired" || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
           grep -q "drivers/kernelsu/Kconfig" drivers/Kconfig && echo "drivers/Kconfig wired" || echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
 
-      - name: Configure defconfig (KSU + kprobes hooks, keep SELinux enforcing)
+      - name: Configure defconfig (KSU + kprobes, keep SELinux enforcing)
         working-directory: kernel
         run: |
           DC=arch/arm64/configs/sweet_user_defconfig
@@ -52,48 +49,44 @@ jobs:
             echo "CONFIG_KPROBES=y"
             echo "CONFIG_HAVE_KPROBES=y"
             echo "CONFIG_KPROBE_EVENTS=y"
-            echo "CONFIG_KPROBES_ON_FTRACE=y"
-            echo "CONFIG_HAVE_KPROBES_ON_FTRACE=y"
-            echo "CONFIG_FTRACE=y"
-            echo "CONFIG_FUNCTION_TRACER=y"
-            echo "CONFIG_DYNAMIC_FTRACE=y"
             echo "CONFIG_MODULES=y"
             echo "CONFIG_KALLSYMS=y"
             echo "CONFIG_KALLSYMS_ALL=y"
           } >> "$DC"
           echo "appended KSU+kprobes to $DC"
 
-      - name: Build kernel (Image.gz-dtb, enforcing, -Wno-error)
+      - name: Build kernel (clang CC + ld.lld + llvm binutils, enforcing, -Wno-error)
         working-directory: kernel
         run: |
-          export ARCH=arm64 SUBARCH=arm64
-          export PATH="$GITHUB_WORKSPACE/clang/bin:$GITHUB_WORKSPACE/gcc64/bin:$GITHUB_WORKSPACE/gcc32/bin:$PATH"
+          export PATH="$GITHUB_WORKSPACE/clang/bin:$PATH"
           export KBUILD_BUILD_USER=sikandar KBUILD_BUILD_HOST=sweet-miui-ksu
-          MFLAGS="O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CC=clang CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=$GITHUB_WORKSPACE/gcc64/bin/aarch64-elf- CROSS_COMPILE_ARM32=$GITHUB_WORKSPACE/gcc32/bin/arm-none-eabi- KCFLAGS=-Wno-error"
+          clang --version | head -1; ld.lld --version | head -1
+          MFLAGS="O=out ARCH=arm64 \
+            CC=clang HOSTCC=clang HOSTCXX=clang++ \
+            LD=ld.lld HOSTLD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip READELF=llvm-readelf OBJSIZE=llvm-size \
+            LLVM_IAS=1 \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            KCFLAGS=-Wno-error"
           make $MFLAGS sweet_user_defconfig
           ./scripts/config --file out/.config --enable CONFIG_KSU
           make $MFLAGS olddefconfig
           echo "=== KSU in config ==="; grep CONFIG_KSU out/.config || { echo "CONFIG_KSU MISSING"; exit 1; }
-          # try appended-dtb image first, fall back to Image.gz
           make -j$(nproc) $MFLAGS Image.gz-dtb 2>&1 | tee "$GITHUB_WORKSPACE/build.log" || \
           make -j$(nproc) $MFLAGS Image.gz 2>&1 | tee -a "$GITHUB_WORKSPACE/build.log"
-          ls -la out/arch/arm64/boot/
+          echo "=== boot output ==="; ls -la out/arch/arm64/boot/ || true
 
       - name: Package AnyKernel3 (flashable on stock MIUI boot)
         run: |
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3 AK3
-          rm -f AK3/.git -rf
-          # pick the kernel image that got built
+          rm -rf AK3/.git
           if [ -f kernel/out/arch/arm64/boot/Image.gz-dtb ]; then
             cp kernel/out/arch/arm64/boot/Image.gz-dtb AK3/
-            KIMG=Image.gz-dtb
           else
             cp kernel/out/arch/arm64/boot/Image.gz AK3/
-            KIMG=Image.gz
-            # append any built dtbs so hardware tree is present
             cat kernel/out/arch/arm64/boot/dts/**/*.dtb > AK3/dtb 2>/dev/null || true
           fi
-          # configure anykernel.sh for sweet, A-only boot block
           cat > AK3/anykernel.sh <<'AK'
           properties() { '
           kernel.string=sweet MIUI 12.5 KSU-Next (driver 12797)
@@ -127,7 +120,7 @@ jobs:
           cp sweet-miui125-ksunext-AnyKernel3.zip artifact/ 2>/dev/null || true
           cp kernel/out/.config artifact/kernel_config_used 2>/dev/null || true
           cp "$GITHUB_WORKSPACE/build.log" artifact/ 2>/dev/null || true
-          echo "MiCode sweet-r-oss (4.14.180, MIUI12.5/A11) + KernelSU-Next v1.0.9 (driver 12797) + kprobes hooks, SELinux ENFORCING, ZyCromerZ Clang17 + greenforce GCC, LLVM=1" > artifact/build-info.txt
+          echo "MiCode sweet-r-oss (4.14.180, MIUI12.5/A11) + KernelSU-Next v1.0.9 (driver 12797) + kprobes, SELinux ENFORCING, Clang17 CC + ld.lld + llvm binutils + aarch64-linux-gnu" > artifact/build-info.txt
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
