@@ -36,6 +36,62 @@ jobs:
           grep -q kernelsu drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
           grep -q "drivers/kernelsu/Kconfig" drivers/Kconfig || echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
 
+      - name: Backport path_umount to fs/namespace.c (KSU-Next needs it; added upstream in 5.9)
+        working-directory: kernel
+        run: |
+          python3 - <<'PYEOF'
+          import sys
+          f = "fs/namespace.c"
+          s = open(f).read()
+          if "int path_umount(" in s:
+              print("path_umount already present"); sys.exit(0)
+          anchor = "SYSCALL_DEFINE2(umount"
+          if anchor not in s:
+              print("umount syscall anchor NOT FOUND"); sys.exit(1)
+          code = """
+          static int can_umount(const struct path *path, int flags)
+          {
+          	struct mount *mnt = real_mount(path->mnt);
+
+          	if (flags & ~(MNT_FORCE | MNT_DETACH | MNT_EXPIRE | UMOUNT_NOFOLLOW))
+          		return -EINVAL;
+          	if (!may_mount())
+          		return -EPERM;
+          	if (path->dentry != path->mnt->mnt_root)
+          		return -EINVAL;
+          	if (!check_mnt(mnt))
+          		return -EINVAL;
+          	if (mnt->mnt.mnt_flags & MNT_LOCKED)
+          		return -EINVAL;
+          	if (flags & MNT_FORCE && !capable(CAP_SYS_ADMIN))
+          		return -EPERM;
+          	return 0;
+          }
+
+          int path_umount(struct path *path, int flags)
+          {
+          	struct mount *mnt = real_mount(path->mnt);
+          	int ret;
+
+          	ret = can_umount(path, flags);
+          	if (!ret)
+          		ret = do_umount(mnt, flags);
+
+          	dput(path->dentry);
+          	mntput_no_expire(mnt);
+          	return ret;
+          }
+
+          """
+          import textwrap
+          code = textwrap.dedent(code)
+          i = s.index(anchor)
+          s = s[:i] + code + s[i:]
+          open(f, "w").write(s)
+          print("path_umount backported")
+          PYEOF
+          grep -n "int path_umount" fs/namespace.c
+
       - name: Build kernel (clang CC + external GNU as via aarch64-linux-gnu-, ld.lld, enforcing)
         working-directory: kernel
         run: |
