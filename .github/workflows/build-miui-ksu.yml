@@ -49,6 +49,17 @@ jobs:
           } >> "$DC"
           echo "appended KSU to $DC"
 
+      - name: Patch vdso gettimeofday.S for clang integrated-assembler (leading-comma macro calls)
+        working-directory: kernel
+        run: |
+          F=arch/arm64/kernel/vdso/gettimeofday.S
+          before=$(grep -c "clock_gettime_return, " "$F" || true)
+          sed -i 's/clock_gettime_return, /clock_gettime_return /g' "$F"
+          # also fix any other "macro, key=" leading-comma pattern clang IAS rejects, in that file
+          sed -i -E 's/^([[:space:]]*[a-z_]+),[[:space:]]+([a-z_]+=)/\1 \2/' "$F"
+          after=$(grep -c "clock_gettime_return, " "$F" || true)
+          echo "clock_gettime_return leading-comma: before=$before after=$after"
+
       - name: Build kernel (Proton Clang, enforcing, -Wno-error)
         working-directory: kernel
         run: |
