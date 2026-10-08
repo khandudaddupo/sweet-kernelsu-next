@@ -41,18 +41,18 @@ jobs:
         run: |
           set -o pipefail
           # proton for clang/ld.lld/llvm-*, /usr/bin for aarch64-linux-gnu-* binutils (real as, understands -EL)
-          export PATH="$GITHUB_WORKSPACE/proton/bin:/usr/bin:$PATH"
+          P="$GITHUB_WORKSPACE/proton/bin"
+          # Remove proton's generic 'as' so clang can't pick it (it rejects -EL)
+          rm -f "$P/as"
+          # Dedicated dir with ONLY prefixed GNU cross tools (no plain 'as', so host x86 builds are untouched)
+          GNU="$GITHUB_WORKSPACE/gnu"; mkdir -p "$GNU"
+          for t in /usr/bin/aarch64-linux-gnu-* /usr/bin/arm-linux-gnueabi-*; do ln -sf "$t" "$GNU/$(basename "$t")"; done
+          export PATH="$GNU:/usr/bin:$PATH"
           export KBUILD_BUILD_USER=sikandar KBUILD_BUILD_HOST=sweet-miui-ksu
-          # proton/bin/as is a wrong/generic assembler (rejects -EL) and clang picks it for target .o.
-          # Overwrite ONLY it with the real apt GNU aarch64 assembler (understands -EL).
-          REAL_AS=/usr/bin/aarch64-linux-gnu-as
-          test -x "$REAL_AS" || REAL_AS=$(ls /usr/bin/aarch64-linux-gnu-as* | head -1)
-          cp -f "$REAL_AS" "$GITHUB_WORKSPACE/proton/bin/as"
-          echo "proton/bin/as now:"; "$GITHUB_WORKSPACE/proton/bin/as" --version | head -1
-          echo "test -EL:"; echo "" | "$GITHUB_WORKSPACE/proton/bin/as" -EL -o /tmp/t.o - && echo "EL OK"
-          clang --version | head -1
+          echo "elfedit -> $(which aarch64-linux-gnu-elfedit)"; which as
+          "$P/clang" --version | head -1
           MFLAGS="O=out ARCH=arm64 \
-            CC=clang LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
+            CC=$P/clang LD=$P/ld.lld AR=$P/llvm-ar NM=$P/llvm-nm OBJCOPY=$P/llvm-objcopy OBJDUMP=$P/llvm-objdump STRIP=$P/llvm-strip \
             CLANG_TRIPLE=aarch64-linux-gnu- \
             CROSS_COMPILE=aarch64-linux-gnu- \
             CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
