@@ -63,9 +63,18 @@ jobs:
             CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
             KCFLAGS=-Wno-error"
           make $MFLAGS sweet_user_defconfig
-          ./scripts/config --file out/.config --enable CONFIG_KSU
+          # KSU on; disable stackprotector (clang fails the gcc-style prepare-compiler-check); disable broken-asm forced checks
+          ./scripts/config --file out/.config \
+            -e CONFIG_KSU \
+            -d CONFIG_CC_STACKPROTECTOR_STRONG \
+            -d CONFIG_CC_STACKPROTECTOR_REGULAR \
+            -e CONFIG_CC_STACKPROTECTOR_NONE \
+            -d CONFIG_CC_STACKPROTECTOR \
+            -d CONFIG_STACKPROTECTOR_STRONG \
+            -d CONFIG_STACKPROTECTOR \
+            -e CONFIG_CC_STACKPROTECTOR_AUTO 2>/dev/null || true
           make $MFLAGS olddefconfig
-          echo "=== KSU in config ==="; grep CONFIG_KSU out/.config | head
+          echo "=== KSU + stackprotector in config ==="; grep -E "CONFIG_KSU=|STACKPROTECTOR" out/.config | head
           make -j$(nproc) $MFLAGS Image.gz dtbs 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
           echo "=== boot output ==="; ls -la out/arch/arm64/boot/
           test -f out/arch/arm64/boot/Image.gz || { echo "Image.gz NOT produced"; exit 1; }
