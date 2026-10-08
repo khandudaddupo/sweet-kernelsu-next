@@ -65,8 +65,7 @@ jobs:
             CLANG_TRIPLE=aarch64-linux-gnu- \
             CROSS_COMPILE=aarch64-linux-gnu- \
             CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
-            KCFLAGS='-Wno-error -integrated-as' \
-            KAFLAGS=-integrated-as"
+            KCFLAGS=-Wno-error"
           make $MFLAGS sweet_user_defconfig
           # KSU on; disable stackprotector (clang fails the gcc-style prepare-compiler-check); disable broken-asm forced checks
           ./scripts/config --file out/.config \
