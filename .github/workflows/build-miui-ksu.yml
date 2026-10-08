@@ -56,13 +56,17 @@ jobs:
           export PATH="$GITHUB_WORKSPACE/proton/bin:$PATH"
           export KBUILD_BUILD_USER=sikandar KBUILD_BUILD_HOST=sweet-miui-ksu
           clang --version | head -1
+          # 4.14 forces clang to an external 'as' (-no-integrated-as) which picks a wrong assembler
+          # (proton/bin/as: unrecognized option '-EL'). Force clang's integrated assembler instead.
+          grep -rl -- "-no-integrated-as" Makefile arch/arm64/ scripts/ 2>/dev/null | xargs -r sed -i 's/-no-integrated-as/-integrated-as/g'
+          echo "no-integrated-as occurrences left: $(grep -r -- '-no-integrated-as' Makefile arch/arm64/ scripts/ 2>/dev/null | wc -l)"
           MFLAGS="O=out ARCH=arm64 \
             CC=clang LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
-            LLVM_IAS=1 \
             CLANG_TRIPLE=aarch64-linux-gnu- \
             CROSS_COMPILE=aarch64-linux-gnu- \
             CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
-            KCFLAGS=-Wno-error"
+            KCFLAGS='-Wno-error -integrated-as' \
+            KAFLAGS=-integrated-as"
           make $MFLAGS sweet_user_defconfig
           # KSU on; disable stackprotector (clang fails the gcc-style prepare-compiler-check); disable broken-asm forced checks
           ./scripts/config --file out/.config \
