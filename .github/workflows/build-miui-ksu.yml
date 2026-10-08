@@ -43,6 +43,12 @@ jobs:
           # proton for clang/ld.lld/llvm-*, /usr/bin for aarch64-linux-gnu-* binutils (real as, understands -EL)
           export PATH="$GITHUB_WORKSPACE/proton/bin:/usr/bin:$PATH"
           export KBUILD_BUILD_USER=sikandar KBUILD_BUILD_HOST=sweet-miui-ksu
+          # proton/bin/as is a wrong/generic assembler (rejects -EL). clang picks it up for target .o.
+          # Point proton's as (and prefixed as) at the real GNU aarch64/arm assemblers.
+          ln -sf "$(command -v aarch64-linux-gnu-as)" "$GITHUB_WORKSPACE/proton/bin/as"
+          ln -sf "$(command -v aarch64-linux-gnu-as)" "$GITHUB_WORKSPACE/proton/bin/aarch64-linux-gnu-as"
+          ln -sf "$(command -v arm-linux-gnueabi-as)" "$GITHUB_WORKSPACE/proton/bin/arm-linux-gnueabi-as" 2>/dev/null || true
+          ls -l "$GITHUB_WORKSPACE/proton/bin/as"
           clang --version | head -1; aarch64-linux-gnu-as --version | head -1
           MFLAGS="O=out ARCH=arm64 \
             CC=clang LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
