@@ -108,7 +108,7 @@ jobs:
           echo "elfedit -> $(which aarch64-linux-gnu-elfedit)"; which as
           "$P/clang" --version | head -1
           MFLAGS="O=out ARCH=arm64 \
-            CC=$P/clang \
+            CC=$P/clang LD=$P/ld.lld \
             CLANG_TRIPLE=aarch64-linux-gnu- \
             CROSS_COMPILE=aarch64-linux-gnu- \
             CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
