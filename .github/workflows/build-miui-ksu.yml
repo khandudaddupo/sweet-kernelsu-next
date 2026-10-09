@@ -60,6 +60,20 @@ jobs:
           grep -q kernelsu drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
           grep -q "drivers/kernelsu/Kconfig" drivers/Kconfig || echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
 
+      - name: Integrate SUSFS (susfs4ksu kernel side + KernelSU-Next side)
+        working-directory: kernel
+        run: |
+          set -e
+          W="$GITHUB_WORKSPACE"
+          # --- KernelSU-Next side (drivers/kernelsu -> KernelSU-Next/kernel) ---
+          patch -p1 -d KernelSU-Next < "$W/susfs/10_ksu_susfs_kernelsu-next.patch"
+          # --- kernel side: susfs source files ---
+          cp "$W/susfs/susfs_files/susfs.c"  "$W/susfs/susfs_files/sus_su.c" fs/
+          cp "$W/susfs/susfs_files/susfs.h"  "$W/susfs/susfs_files/susfs_def.h" "$W/susfs/susfs_files/sus_su.h" include/linux/
+          # --- kernel side: fs hooks patch ---
+          patch -p1 < "$W/susfs/50_susfs_kernel-4.14_fs.patch"
+          test -f fs/susfs.c && grep -q "susfs.o" fs/Makefile && echo "SUSFS integrated OK"
+
       - name: Backport path_umount (KSU-Next needs it; upstream since 5.9)
         working-directory: kernel
         run: |
@@ -144,11 +158,19 @@ jobs:
             -d CONFIG_LOCALVERSION_AUTO --set-str CONFIG_LOCALVERSION "-perf-g2f5c6cc-dirty" \
             -e CONFIG_TOUCHSCREEN_GOODIX_GTX9896_I2C -e CONFIG_TOUCHSCREEN_GOODIX_GTX9896_UPDATE \
             -e CONFIG_TOUCHSCREEN_GOODIX_GTX9896_GESTURE -e CONFIG_TOUCHSCREEN_GOODIX_GTX9896_TOOLS \
-            -e CONFIG_NEW_TOUCH_GAMEMODE
+            -e CONFIG_NEW_TOUCH_GAMEMODE \
+            -e CONFIG_KSU_SUSFS -e CONFIG_KSU_SUSFS_SUS_PATH -e CONFIG_KSU_SUSFS_SUS_MOUNT \
+            -e CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT -e CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT \
+            -e CONFIG_KSU_SUSFS_SUS_KSTAT -e CONFIG_KSU_SUSFS_TRY_UMOUNT \
+            -e CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT -e CONFIG_KSU_SUSFS_SPOOF_UNAME \
+            -e CONFIG_KSU_SUSFS_ENABLE_LOG -e CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS \
+            -e CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG -e CONFIG_KSU_SUSFS_OPEN_REDIRECT \
+            -d CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT
           make $MFLAGS olddefconfig
           echo "=== key config ==="
           grep -E "^CONFIG_KSU|KPROBES|^CONFIG_MODVERSIONS|STACKPROTECTOR_STRONG|^CONFIG_LOCALVERSION|LOCALVERSION_AUTO" out/.config
           grep -q "^CONFIG_KSU=y" out/.config || { echo "KSU NOT ENABLED"; exit 1; }
+          grep -q "^CONFIG_KSU_SUSFS=y" out/.config || { echo "SUSFS NOT ENABLED"; exit 1; }
           if grep -q "^CONFIG_KPROBES=y" out/.config; then echo "KPROBES must stay off"; exit 1; fi
           grep -q "^CONFIG_TOUCHSCREEN_GOODIX_GTX9896_I2C=y" out/.config || { echo "TOUCH DRIVER (GTX9896_I2C) NOT ENABLED"; exit 1; }
           grep -E "GTX9896|TOUCH_GAMEMODE" out/.config
