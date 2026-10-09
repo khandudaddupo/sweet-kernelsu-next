@@ -116,6 +116,10 @@ jobs:
         working-directory: kernel
         run: python3 "$GITHUB_WORKSPACE/scripts/ksu_v109_manual_hooks.py"
 
+      - name: Relax modversions (stock vendor .ko audio/wlan/fpc) with struct-module size guard
+        working-directory: kernel
+        run: python3 "$GITHUB_WORKSPACE/scripts/relax_modversions.py"
+
       - name: Build kernel
         working-directory: kernel
         run: |
