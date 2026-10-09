@@ -117,9 +117,11 @@ jobs:
           # KSU on; stackprotector off (clang fails the gcc-style prepare-compiler-check)
           ./scripts/config --file out/.config -e CONFIG_KSU \
             -d CONFIG_CC_STACKPROTECTOR_STRONG -d CONFIG_CC_STACKPROTECTOR_REGULAR -e CONFIG_CC_STACKPROTECTOR_NONE \
-            -d CONFIG_MODVERSIONS -d CONFIG_MODULE_SRCVERSION_ALL
+            -d CONFIG_MODVERSIONS -d CONFIG_MODULE_SRCVERSION_ALL \
+            -e CONFIG_KPROBES -e CONFIG_KPROBE_EVENTS -e CONFIG_KSU_KPROBES_HOOK
           make $MFLAGS olddefconfig
-          grep -E "CONFIG_KSU=|STACKPROTECTOR" out/.config | head
+          grep -E "CONFIG_KSU|KPROBES=|STACKPROTECTOR_NONE|MODVERSIONS" out/.config
+          grep -q "^CONFIG_KSU_KPROBES_HOOK=y" out/.config || { echo "KSU KPROBES HOOK NOT ENABLED"; exit 1; }
           make -j$(nproc) $MFLAGS Image.gz dtbs 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
           ls -la out/arch/arm64/boot/
           test -f out/arch/arm64/boot/Image.gz || { echo "Image.gz NOT produced"; exit 1; }
