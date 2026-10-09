@@ -125,7 +125,12 @@ jobs:
         run: |
           set -o pipefail
           W="$GITHUB_WORKSPACE"
-          export KBUILD_BUILD_USER=sikandar KBUILD_BUILD_HOST=sweet-miui-ksu
+          # Match stock MIUI kernel /proc/version exactly (RASPs flag custom-kernel-on-stock-ROM via build date/builder/compiler mismatch)
+          export KBUILD_BUILD_USER=builder KBUILD_BUILD_HOST=c5-miui-ota-bd237.bj
+          export KBUILD_BUILD_TIMESTAMP="Thu Jan 6 01:04:05 CST 2022"
+          # force compiler string to stock clang 10 (LD binutils-2.27 already matches)
+          sed -i 's#^\( *\)CC_VERSION=.*#\1CC_VERSION="clang version 10.0.6 for Android NDK"#' scripts/mkcompile_h
+          grep -n "CC_VERSION=" scripts/mkcompile_h
           MFLAGS="O=out ARCH=arm64 \
             CC=$W/clang/bin/clang \
             CLANG_TRIPLE=aarch64-linux-gnu- \
