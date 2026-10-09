@@ -16,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        clang: [proton13, aosp-r416183b]
+        clang: [proton13]
     steps:
       - name: Checkout build repo
         uses: actions/checkout@v4
@@ -132,12 +132,17 @@ jobs:
           cp "$W/configs/miui125_stock.config" out/.config
           ./scripts/config --file out/.config \
             -e CONFIG_KSU -d CONFIG_KSU_KPROBES_HOOK -d CONFIG_KPROBES \
-            -d CONFIG_LOCALVERSION_AUTO --set-str CONFIG_LOCALVERSION "-perf-g2f5c6cc-dirty"
+            -d CONFIG_LOCALVERSION_AUTO --set-str CONFIG_LOCALVERSION "-perf-g2f5c6cc-dirty" \
+            -e CONFIG_TOUCHSCREEN_GOODIX_GTX9896_I2C -e CONFIG_TOUCHSCREEN_GOODIX_GTX9896_UPDATE \
+            -e CONFIG_TOUCHSCREEN_GOODIX_GTX9896_GESTURE -e CONFIG_TOUCHSCREEN_GOODIX_GTX9896_TOOLS \
+            -e CONFIG_NEW_TOUCH_GAMEMODE
           make $MFLAGS olddefconfig
           echo "=== key config ==="
           grep -E "^CONFIG_KSU|KPROBES|^CONFIG_MODVERSIONS|STACKPROTECTOR_STRONG|^CONFIG_LOCALVERSION|LOCALVERSION_AUTO" out/.config
           grep -q "^CONFIG_KSU=y" out/.config || { echo "KSU NOT ENABLED"; exit 1; }
           if grep -q "^CONFIG_KPROBES=y" out/.config; then echo "KPROBES must stay off"; exit 1; fi
+          grep -q "^CONFIG_TOUCHSCREEN_GOODIX_GTX9896_I2C=y" out/.config || { echo "TOUCH DRIVER (GTX9896_I2C) NOT ENABLED"; exit 1; }
+          grep -E "GTX9896|TOUCH_GAMEMODE" out/.config
           echo "=== stock =y options dropped (not in public source) ==="
           comm -23 <(grep -E '^CONFIG_.*=y' "$W/configs/miui125_stock.config" | sort) <(grep -E '^CONFIG_.*=y' out/.config | sort) || true
           make -j$(nproc) $MFLAGS Image.gz 2>&1 | tee "$W/build.log"
