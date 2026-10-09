@@ -1,4 +1,10 @@
-name: Build sweet MIUI 12.5 KSU-Next (MiCode sweet-r-oss)
+name: Build sweet MIUI 12.5 KSU-Next (MiCode sweet-r-oss, stock config)
+
+# Matches the running stock kernel as closely as possible:
+#   uname: 4.14.180-perf-g2f5c6cc-dirty, built by Xiaomi with clang 10 + GNU ld 2.27
+#   (aarch64-linux-android-4.9 binutils). Config = /proc/config.gz from the phone
+#   (configs/miui125_stock.config). KPROBES stays OFF like stock (enabling it changes
+#   struct module and breaks the stock vendor .ko modules) -> KSU uses manual hooks.
 
 on:
   workflow_dispatch:
@@ -7,27 +13,45 @@ jobs:
   build:
     runs-on: ubuntu-22.04
     timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        clang: [proton13, aosp-r416183b]
     steps:
       - name: Checkout build repo
         uses: actions/checkout@v4
 
-      - name: Install build deps + aarch64/arm GNU cross binutils (real 'as' that handles -EL)
+      - name: Install build deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y bc bison build-essential ccache cpio flex git libelf-dev libncurses-dev libssl-dev lz4 python3 schedtool xsltproc zip zlib1g-dev libxml2-utils aria2 \
-            gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu gcc-arm-linux-gnueabi binutils-arm-linux-gnueabi
-          which aarch64-linux-gnu-elfedit aarch64-linux-gnu-as
+          sudo apt-get install -y bc bison build-essential cpio flex git libelf-dev libncurses-dev libssl-dev lz4 python3 xsltproc zip zlib1g-dev libxml2-utils
 
-      - name: Download Proton Clang (clang 13, for CC + ld.lld + llvm-*)
+      - name: Toolchains (clang + Android gcc-4.9 binutils 2.27, same linker family as stock)
         run: |
-          git clone --depth=1 https://github.com/kdrag0n/proton-clang proton
-          proton/bin/clang --version | head -1
+          if [ "${{ matrix.clang }}" = "proton13" ]; then
+            git clone --depth=1 https://github.com/kdrag0n/proton-clang clang
+          else
+            git clone --depth=1 -b lineage-20.0 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b clang
+          fi
+          rm -f clang/bin/as
+          git clone --depth=1 -b lineage-19.1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9 gcc64
+          git clone --depth=1 -b lineage-19.1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9 gcc32
+          # Prefix dir the kernel hands to clang via --prefix (derived from $(CROSS_COMPILE)elfedit).
+          # Contains the prefixed tools plus a plain 'as' so clang's external assembler is the
+          # aarch64 GNU as 2.27. Kept OUT of PATH so host (x86) builds keep /usr/bin/as.
+          mkdir -p tc64 tc32
+          for t in gcc64/bin/aarch64-linux-android-*; do ln -sf "$PWD/$t" tc64/; done
+          ln -sf "$PWD/gcc64/bin/aarch64-linux-android-as" tc64/as
+          for t in gcc32/bin/arm-linux-androideabi-*; do ln -sf "$PWD/$t" tc32/; done
+          ln -sf "$PWD/gcc32/bin/arm-linux-androideabi-as" tc32/as
+          clang/bin/clang --version | head -1
+          tc64/aarch64-linux-android-ld --version | head -1
+          tc64/as --version | head -1
 
       - name: Clone MiCode sweet-r-oss (official MIUI 12.5 / Android 11 source, 4.14.180)
         run: |
           git clone --depth=1 -b sweet-r-oss https://github.com/MiCode/Xiaomi_Kernel_OpenSource.git kernel
-          cd kernel
-          head -3 Makefile; ls arch/arm64/configs/ | grep sweet
+          head -4 kernel/Makefile
 
       - name: Integrate KernelSU-Next v1.0.9 (driver 12797)
         working-directory: kernel
@@ -36,19 +60,19 @@ jobs:
           grep -q kernelsu drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
           grep -q "drivers/kernelsu/Kconfig" drivers/Kconfig || echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
 
-      - name: Backport path_umount to fs/namespace.c (KSU-Next needs it; added upstream in 5.9)
+      - name: Backport path_umount (KSU-Next needs it; upstream since 5.9)
         working-directory: kernel
         run: |
           python3 - <<'PYEOF'
-          import sys
+          import sys, textwrap
           f = "fs/namespace.c"
           s = open(f).read()
           if "int path_umount(" in s:
               print("path_umount already present"); sys.exit(0)
           anchor = "SYSCALL_DEFINE2(umount"
           if anchor not in s:
-              print("umount syscall anchor NOT FOUND"); sys.exit(1)
-          code = """
+              print("umount anchor NOT FOUND"); sys.exit(1)
+          code = textwrap.dedent("""
           static int can_umount(const struct path *path, int flags)
           {
           	struct mount *mnt = real_mount(path->mnt);
@@ -82,60 +106,55 @@ jobs:
           	return ret;
           }
 
-          """
-          import textwrap
-          code = textwrap.dedent(code)
+          """)
           i = s.index(anchor)
-          s = s[:i] + code + s[i:]
-          open(f, "w").write(s)
+          open(f, "w").write(s[:i] + code + s[i:])
           print("path_umount backported")
           PYEOF
-          grep -n "int path_umount" fs/namespace.c
 
-      - name: Build kernel (clang CC + external GNU as via aarch64-linux-gnu-, ld.lld, enforcing)
+      - name: KSU manual hooks (exec/faccessat/stat/vfs_read/input/devpts)
+        working-directory: kernel
+        run: python3 "$GITHUB_WORKSPACE/scripts/ksu_v109_manual_hooks.py"
+
+      - name: Build kernel
         working-directory: kernel
         run: |
           set -o pipefail
-          # proton for clang/ld.lld/llvm-*, /usr/bin for aarch64-linux-gnu-* binutils (real as, understands -EL)
-          P="$GITHUB_WORKSPACE/proton/bin"
-          # Remove proton's generic 'as' so clang can't pick it (it rejects -EL)
-          rm -f "$P/as"
-          # Dedicated dir with ONLY prefixed GNU cross tools (no plain 'as', so host x86 builds are untouched)
-          GNU="$GITHUB_WORKSPACE/gnu"; mkdir -p "$GNU"
-          for t in /usr/bin/aarch64-linux-gnu-* /usr/bin/arm-linux-gnueabi-*; do ln -sf "$t" "$GNU/$(basename "$t")"; done
-          export PATH="$GNU:/usr/bin:$PATH"
+          W="$GITHUB_WORKSPACE"
           export KBUILD_BUILD_USER=sikandar KBUILD_BUILD_HOST=sweet-miui-ksu
-          echo "elfedit -> $(which aarch64-linux-gnu-elfedit)"; which as
-          "$P/clang" --version | head -1
           MFLAGS="O=out ARCH=arm64 \
-            CC=$P/clang LD=$P/ld.lld \
+            CC=$W/clang/bin/clang \
             CLANG_TRIPLE=aarch64-linux-gnu- \
-            CROSS_COMPILE=aarch64-linux-gnu- \
-            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
-            KCFLAGS=-Wno-error"
-          make $MFLAGS sweet_user_defconfig
-          # KSU on; stackprotector off (clang fails the gcc-style prepare-compiler-check)
-          ./scripts/config --file out/.config -e CONFIG_KSU \
-            -d CONFIG_CC_STACKPROTECTOR_STRONG -d CONFIG_CC_STACKPROTECTOR_REGULAR -e CONFIG_CC_STACKPROTECTOR_NONE \
-            -d CONFIG_MODVERSIONS -d CONFIG_MODULE_SRCVERSION_ALL \
-            -e CONFIG_KPROBES -e CONFIG_KPROBE_EVENTS -e CONFIG_KSU_KPROBES_HOOK
+            CROSS_COMPILE=$W/tc64/aarch64-linux-android- \
+            CROSS_COMPILE_ARM32=$W/tc32/arm-linux-androideabi- \
+            KCFLAGS=-Wno-error LOCALVERSION="
+          mkdir -p out
+          cp "$W/configs/miui125_stock.config" out/.config
+          ./scripts/config --file out/.config \
+            -e CONFIG_KSU -d CONFIG_KSU_KPROBES_HOOK -d CONFIG_KPROBES \
+            -d CONFIG_LOCALVERSION_AUTO --set-str CONFIG_LOCALVERSION "-perf-g2f5c6cc-dirty"
           make $MFLAGS olddefconfig
-          grep -E "CONFIG_KSU|KPROBES=|STACKPROTECTOR_NONE|MODVERSIONS" out/.config
-          grep -q "^CONFIG_KSU_KPROBES_HOOK=y" out/.config || { echo "KSU KPROBES HOOK NOT ENABLED"; exit 1; }
-          make -j$(nproc) $MFLAGS Image.gz dtbs 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
-          ls -la out/arch/arm64/boot/
-          test -f out/arch/arm64/boot/Image.gz || { echo "Image.gz NOT produced"; exit 1; }
+          echo "=== key config ==="
+          grep -E "^CONFIG_KSU|KPROBES|^CONFIG_MODVERSIONS|STACKPROTECTOR_STRONG|^CONFIG_LOCALVERSION|LOCALVERSION_AUTO" out/.config
+          grep -q "^CONFIG_KSU=y" out/.config || { echo "KSU NOT ENABLED"; exit 1; }
+          if grep -q "^CONFIG_KPROBES=y" out/.config; then echo "KPROBES must stay off"; exit 1; fi
+          echo "=== stock =y options dropped (not in public source) ==="
+          comm -23 <(grep -E '^CONFIG_.*=y' "$W/configs/miui125_stock.config" | sort) <(grep -E '^CONFIG_.*=y' out/.config | sort) || true
+          make -j$(nproc) $MFLAGS Image.gz 2>&1 | tee "$W/build.log"
+          REL=$(cat out/include/config/kernel.release)
+          echo "kernel.release = $REL"
+          [ "$REL" = "4.14.180-perf-g2f5c6cc-dirty" ] || { echo "release string does not match stock"; exit 1; }
+          ls -la out/arch/arm64/boot/Image.gz
 
-      - name: Package AnyKernel3 (replaces kernel in stock MIUI boot, keeps ramdisk+dtb)
+      - name: Package AnyKernel3 (replaces only the kernel in stock MIUI boot; keeps ramdisk+dtb)
         run: |
           set -e
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3 AK3
           rm -rf AK3/.git
           cp kernel/out/arch/arm64/boot/Image.gz AK3/Image.gz
-          rm -f AK3/anykernel.sh
           cat > AK3/anykernel.sh <<'AKEOF'
           properties() { '
-          kernel.string=sweet MIUI 12.5 KSU-Next driver 12797
+          kernel.string=sweet MIUI 12.5 KSU-Next v1.0.9 (stock config, manual hooks)
           do.devicecheck=1
           do.modules=0
           do.systemless=1
@@ -147,30 +166,24 @@ jobs:
           supported.versions=
           supported.patchlevels=
           '; }
-          block=/dev/block/bootdevice/by-name/boot;
-          is_slot_device=0;
-          ramdisk_compression=auto;
-          patch_vbmeta_flag=auto;
+          BLOCK=/dev/block/bootdevice/by-name/boot;
+          IS_SLOT_DEVICE=0;
+          RAMDISK_COMPRESSION=auto;
+          PATCH_VBMETA_FLAG=auto;
           . tools/ak3-core.sh;
           split_boot;
           flash_boot;
           AKEOF
-          cd AK3
-          zip -r9 ../sweet-miui125-ksunext-AnyKernel3.zip * -x .git\* README.md
-          cd ..
-          ls -la sweet-miui125-ksunext-AnyKernel3.zip
-
-      - name: Collect artifact
-        run: |
+          cd AK3 && zip -r9 "../sweet-miui125-ksunext-${{ matrix.clang }}.zip" * -x .git\* README.md && cd ..
           mkdir -p artifact
-          cp sweet-miui125-ksunext-AnyKernel3.zip artifact/ 2>/dev/null || true
-          cp kernel/out/.config artifact/kernel_config_used 2>/dev/null || true
-          cp "$GITHUB_WORKSPACE/build.log" artifact/ 2>/dev/null || true
-          echo "MiCode sweet-r-oss (4.14.180, MIUI12.5/A11) + KernelSU-Next v1.0.9 (driver 12797), SELinux ENFORCING, Proton Clang CC + external aarch64-linux-gnu as + ld.lld" > artifact/build-info.txt
+          cp sweet-miui125-ksunext-*.zip artifact/
+          cp kernel/out/.config artifact/kernel_config_used
+          cp build.log artifact/
+          echo "MiCode sweet-r-oss + stock MIUI12.5 config + KernelSU-Next v1.0.9 (12797) manual hooks; clang=${{ matrix.clang }}; GNU binutils 2.27 (aarch64-linux-android-4.9); release 4.14.180-perf-g2f5c6cc-dirty" > artifact/build-info.txt
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: sweet-miui125-ksunext
+          name: sweet-miui125-ksunext-${{ matrix.clang }}
           path: artifact/
           retention-days: 30
