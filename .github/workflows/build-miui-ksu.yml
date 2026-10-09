@@ -116,7 +116,8 @@ jobs:
           make $MFLAGS sweet_user_defconfig
           # KSU on; stackprotector off (clang fails the gcc-style prepare-compiler-check)
           ./scripts/config --file out/.config -e CONFIG_KSU \
-            -d CONFIG_CC_STACKPROTECTOR_STRONG -d CONFIG_CC_STACKPROTECTOR_REGULAR -e CONFIG_CC_STACKPROTECTOR_NONE
+            -d CONFIG_CC_STACKPROTECTOR_STRONG -d CONFIG_CC_STACKPROTECTOR_REGULAR -e CONFIG_CC_STACKPROTECTOR_NONE \
+            -d CONFIG_MODVERSIONS -d CONFIG_MODULE_SRCVERSION_ALL
           make $MFLAGS olddefconfig
           grep -E "CONFIG_KSU=|STACKPROTECTOR" out/.config | head
           make -j$(nproc) $MFLAGS Image.gz dtbs 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
