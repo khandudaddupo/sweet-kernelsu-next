@@ -1,0 +1,233 @@
+name: Build sweet MIUI 14 KSU-Next (MiCode sweet-r-oss @4.14.190, stock config)
+
+# Matches the running stock kernel as closely as possible:
+#   uname: 4.14.180-perf-g2f5c6cc-dirty, built by Xiaomi with clang 10 + GNU ld 2.27
+#   (aarch64-linux-android-4.9 binutils). Config = /proc/config.gz from the phone
+#   (configs/miui125_stock.config). KPROBES stays OFF like stock (enabling it changes
+#   struct module and breaks the stock vendor .ko modules) -> KSU uses manual hooks.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        clang: [proton13]
+    steps:
+      - name: Checkout build repo
+        uses: actions/checkout@v4
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bc bison build-essential cpio flex git libelf-dev libncurses-dev libssl-dev lz4 python3 xsltproc zip zlib1g-dev libxml2-utils
+
+      - name: Toolchains (clang + Android gcc-4.9 binutils 2.27, same linker family as stock)
+        run: |
+          if [ "${{ matrix.clang }}" = "proton13" ]; then
+            git clone --depth=1 https://github.com/kdrag0n/proton-clang clang
+          else
+            git clone --depth=1 -b lineage-20.0 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b clang
+          fi
+          rm -f clang/bin/as
+          git clone --depth=1 -b lineage-19.1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9 gcc64
+          git clone --depth=1 -b lineage-19.1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9 gcc32
+          # Prefix dir the kernel hands to clang via --prefix (derived from $(CROSS_COMPILE)elfedit).
+          # Contains the prefixed tools plus a plain 'as' so clang's external assembler is the
+          # aarch64 GNU as 2.27. Kept OUT of PATH so host (x86) builds keep /usr/bin/as.
+          mkdir -p tc64 tc32
+          for t in gcc64/bin/aarch64-linux-android-*; do ln -sf "$PWD/$t" tc64/; done
+          ln -sf "$PWD/gcc64/bin/aarch64-linux-android-as" tc64/as
+          for t in gcc32/bin/arm-linux-androideabi-*; do ln -sf "$PWD/$t" tc32/; done
+          ln -sf "$PWD/gcc32/bin/arm-linux-androideabi-as" tc32/as
+          clang/bin/clang --version | head -1
+          tc64/aarch64-linux-android-ld --version | head -1
+          tc64/as --version | head -1
+
+      - name: Clone MiCode sweet-r-oss (official MIUI 12.5 / Android 11 source, 4.14.180)
+        run: |
+          git clone --depth=1 -b sweet-r-oss https://github.com/MiCode/Xiaomi_Kernel_OpenSource.git kernel
+          head -4 kernel/Makefile
+          # MIUI 14 kernel is 4.14.190; public source is 4.14.180. Patch SUBLEVEL so the
+          # kernel vermagic becomes 4.14.190, matching the MIUI 14 vendor .ko modules.
+          sed -i 's/^SUBLEVEL = 180/SUBLEVEL = 190/' kernel/Makefile
+          grep -E "^SUBLEVEL" kernel/Makefile
+
+      - name: Integrate KernelSU-Next v1.0.9 (driver 12797)
+        working-directory: kernel
+        run: |
+          curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/v1.0.9/kernel/setup.sh" | bash -s v1.0.9
+          grep -q kernelsu drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
+          grep -q "drivers/kernelsu/Kconfig" drivers/Kconfig || echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
+
+      - name: Integrate SUSFS (susfs4ksu kernel side + KernelSU-Next side)
+        working-directory: kernel
+        run: |
+          set -e
+          W="$GITHUB_WORKSPACE"
+          # --- KernelSU-Next side (drivers/kernelsu -> KernelSU-Next/kernel) ---
+          patch -p1 -d KernelSU-Next < "$W/susfs/10_ksu_susfs_kernelsu-next.patch"
+          # --- kernel side: susfs source files ---
+          cp "$W/susfs/susfs_files/susfs.c"  "$W/susfs/susfs_files/sus_su.c" fs/
+          cp "$W/susfs/susfs_files/susfs.h"  "$W/susfs/susfs_files/susfs_def.h" "$W/susfs/susfs_files/sus_su.h" include/linux/
+          # --- kernel side: fs hooks patch ---
+          patch -p1 < "$W/susfs/50_susfs_kernel-4.14_fs.patch"
+          test -f fs/susfs.c && grep -q "susfs.o" fs/Makefile && echo "SUSFS integrated OK"
+
+      - name: Backport path_umount (KSU-Next needs it; upstream since 5.9)
+        working-directory: kernel
+        run: |
+          python3 - <<'PYEOF'
+          import sys, textwrap
+          f = "fs/namespace.c"
+          s = open(f).read()
+          if "int path_umount(" in s:
+              print("path_umount already present"); sys.exit(0)
+          anchor = "SYSCALL_DEFINE2(umount"
+          if anchor not in s:
+              print("umount anchor NOT FOUND"); sys.exit(1)
+          code = textwrap.dedent("""
+          static int can_umount(const struct path *path, int flags)
+          {
+          	struct mount *mnt = real_mount(path->mnt);
+
+          	if (flags & ~(MNT_FORCE | MNT_DETACH | MNT_EXPIRE | UMOUNT_NOFOLLOW))
+          		return -EINVAL;
+          	if (!may_mount())
+          		return -EPERM;
+          	if (path->dentry != path->mnt->mnt_root)
+          		return -EINVAL;
+          	if (!check_mnt(mnt))
+          		return -EINVAL;
+          	if (mnt->mnt.mnt_flags & MNT_LOCKED)
+          		return -EINVAL;
+          	if (flags & MNT_FORCE && !capable(CAP_SYS_ADMIN))
+          		return -EPERM;
+          	return 0;
+          }
+
+          int path_umount(struct path *path, int flags)
+          {
+          	struct mount *mnt = real_mount(path->mnt);
+          	int ret;
+
+          	ret = can_umount(path, flags);
+          	if (!ret)
+          		ret = do_umount(mnt, flags);
+
+          	dput(path->dentry);
+          	mntput_no_expire(mnt);
+          	return ret;
+          }
+
+          """)
+          i = s.index(anchor)
+          open(f, "w").write(s[:i] + code + s[i:])
+          print("path_umount backported")
+          PYEOF
+
+      - name: KSU manual hooks (exec/faccessat/stat/vfs_read/input/devpts)
+        working-directory: kernel
+        run: python3 "$GITHUB_WORKSPACE/scripts/ksu_v109_manual_hooks.py"
+
+      - name: Relax modversions (stock vendor .ko audio/wlan/fpc) with struct-module size guard
+        working-directory: kernel
+        run: python3 "$GITHUB_WORKSPACE/scripts/relax_modversions.py"
+
+      - name: Build kernel
+        working-directory: kernel
+        run: |
+          set -o pipefail
+          W="$GITHUB_WORKSPACE"
+          # Match stock MIUI kernel /proc/version exactly (RASPs flag custom-kernel-on-stock-ROM via build date/builder/compiler mismatch)
+          export KBUILD_BUILD_USER=builder KBUILD_BUILD_HOST=pangu-build-component-vendor-57549-9mvqs-bmgdd-gdkdh
+          export KBUILD_BUILD_TIMESTAMP="Mon Mar 27 07:20:51 UTC 2023"
+          # force compiler string to stock clang 10 (LD binutils-2.27 already matches)
+          sed -i 's#^\( *\)CC_VERSION=.*#\1CC_VERSION="clang version 10.0.7 for Android NDK"#' scripts/mkcompile_h
+          grep -n "CC_VERSION=" scripts/mkcompile_h
+          MFLAGS="O=out ARCH=arm64 \
+            CC=$W/clang/bin/clang \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            CROSS_COMPILE=$W/tc64/aarch64-linux-android- \
+            CROSS_COMPILE_ARM32=$W/tc32/arm-linux-androideabi- \
+            KCFLAGS=-Wno-error LOCALVERSION="
+          mkdir -p out
+          cp "$W/configs/miui14_stock.config" out/.config
+          ./scripts/config --file out/.config \
+            -e CONFIG_KSU -d CONFIG_KSU_KPROBES_HOOK -d CONFIG_KPROBES \
+            -d CONFIG_LOCALVERSION_AUTO --set-str CONFIG_LOCALVERSION "-perf-g019d15b3d168" \
+            -e CONFIG_TOUCHSCREEN_GOODIX_GTX9896_I2C -e CONFIG_TOUCHSCREEN_GOODIX_GTX9896_UPDATE \
+            -e CONFIG_TOUCHSCREEN_GOODIX_GTX9896_GESTURE -e CONFIG_TOUCHSCREEN_GOODIX_GTX9896_TOOLS \
+            -e CONFIG_NEW_TOUCH_GAMEMODE \
+            -e CONFIG_KSU_SUSFS -e CONFIG_KSU_SUSFS_SUS_PATH -e CONFIG_KSU_SUSFS_SUS_MOUNT \
+            -e CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT -e CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT \
+            -e CONFIG_KSU_SUSFS_SUS_KSTAT -e CONFIG_KSU_SUSFS_TRY_UMOUNT \
+            -e CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT -e CONFIG_KSU_SUSFS_SPOOF_UNAME \
+            -e CONFIG_KSU_SUSFS_ENABLE_LOG -e CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS \
+            -e CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG -e CONFIG_KSU_SUSFS_OPEN_REDIRECT \
+            -d CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT \
+            -d CONFIG_IKCONFIG_PROC -d CONFIG_IKCONFIG
+          make $MFLAGS olddefconfig
+          echo "=== key config ==="
+          grep -E "^CONFIG_KSU|KPROBES|^CONFIG_MODVERSIONS|STACKPROTECTOR_STRONG|^CONFIG_LOCALVERSION|LOCALVERSION_AUTO" out/.config
+          grep -q "^CONFIG_KSU=y" out/.config || { echo "KSU NOT ENABLED"; exit 1; }
+          grep -q "^CONFIG_KSU_SUSFS=y" out/.config || { echo "SUSFS NOT ENABLED"; exit 1; }
+          # /proc/config.gz must NOT exist (it is world-readable and leaks CONFIG_KSU to apps)
+          if grep -q "^CONFIG_IKCONFIG_PROC=y" out/.config; then echo "IKCONFIG_PROC still on -> /proc/config.gz would leak CONFIG_KSU"; exit 1; fi
+          echo "IKCONFIG_PROC disabled -> no /proc/config.gz KSU leak"
+          if grep -q "^CONFIG_KPROBES=y" out/.config; then echo "KPROBES must stay off"; exit 1; fi
+          grep -q "^CONFIG_TOUCHSCREEN_GOODIX_GTX9896_I2C=y" out/.config || { echo "TOUCH DRIVER (GTX9896_I2C) NOT ENABLED"; exit 1; }
+          grep -E "GTX9896|TOUCH_GAMEMODE" out/.config
+          echo "=== stock =y options dropped (not in public source) ==="
+          comm -23 <(grep -E '^CONFIG_.*=y' "$W/configs/miui14_stock.config" | sort) <(grep -E '^CONFIG_.*=y' out/.config | sort) || true
+          make -j$(nproc) $MFLAGS Image.gz 2>&1 | tee "$W/build.log"
+          REL=$(cat out/include/config/kernel.release)
+          echo "kernel.release = $REL"
+          [ "$REL" = "4.14.190-perf-g019d15b3d168" ] || { echo "release string does not match stock"; exit 1; }
+          ls -la out/arch/arm64/boot/Image.gz
+
+      - name: Package AnyKernel3 (replaces only the kernel in stock MIUI boot; keeps ramdisk+dtb)
+        run: |
+          set -e
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3 AK3
+          rm -rf AK3/.git
+          cp kernel/out/arch/arm64/boot/Image.gz AK3/Image.gz
+          cat > AK3/anykernel.sh <<'AKEOF'
+          properties() { '
+          kernel.string=sweet MIUI 14 KSU-Next v1.0.9 (4.14.190, stock config, manual hooks)
+          do.devicecheck=1
+          do.modules=0
+          do.systemless=1
+          do.cleanup=1
+          do.cleanuponabort=1
+          device.name1=sweet
+          device.name2=sweetin
+          device.name3=
+          supported.versions=
+          supported.patchlevels=
+          '; }
+          BLOCK=/dev/block/bootdevice/by-name/boot;
+          IS_SLOT_DEVICE=0;
+          RAMDISK_COMPRESSION=auto;
+          PATCH_VBMETA_FLAG=auto;
+          . tools/ak3-core.sh;
+          split_boot;
+          flash_boot;
+          AKEOF
+          cd AK3 && zip -r9 "../sweet-miui125-ksunext-${{ matrix.clang }}.zip" * -x .git\* README.md && cd ..
+          mkdir -p artifact
+          cp sweet-miui125-ksunext-*.zip artifact/
+          cp kernel/out/.config artifact/kernel_config_used
+          cp build.log artifact/
+          echo "MiCode sweet-r-oss + stock MIUI12.5 config + KernelSU-Next v1.0.9 (12797) manual hooks; clang=${{ matrix.clang }}; GNU binutils 2.27 (aarch64-linux-android-4.9); release 4.14.180-perf-g2f5c6cc-dirty" > artifact/build-info.txt
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sweet-miui125-ksunext-${{ matrix.clang }}
+          path: artifact/
+          retention-days: 30
