@@ -165,12 +165,16 @@ jobs:
             -e CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT -e CONFIG_KSU_SUSFS_SPOOF_UNAME \
             -e CONFIG_KSU_SUSFS_ENABLE_LOG -e CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS \
             -e CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG -e CONFIG_KSU_SUSFS_OPEN_REDIRECT \
-            -d CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT
+            -d CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT \
+            -d CONFIG_IKCONFIG_PROC -d CONFIG_IKCONFIG
           make $MFLAGS olddefconfig
           echo "=== key config ==="
           grep -E "^CONFIG_KSU|KPROBES|^CONFIG_MODVERSIONS|STACKPROTECTOR_STRONG|^CONFIG_LOCALVERSION|LOCALVERSION_AUTO" out/.config
           grep -q "^CONFIG_KSU=y" out/.config || { echo "KSU NOT ENABLED"; exit 1; }
           grep -q "^CONFIG_KSU_SUSFS=y" out/.config || { echo "SUSFS NOT ENABLED"; exit 1; }
+          # /proc/config.gz must NOT exist (it is world-readable and leaks CONFIG_KSU to apps)
+          if grep -q "^CONFIG_IKCONFIG_PROC=y" out/.config; then echo "IKCONFIG_PROC still on -> /proc/config.gz would leak CONFIG_KSU"; exit 1; fi
+          echo "IKCONFIG_PROC disabled -> no /proc/config.gz KSU leak"
           if grep -q "^CONFIG_KPROBES=y" out/.config; then echo "KPROBES must stay off"; exit 1; fi
           grep -q "^CONFIG_TOUCHSCREEN_GOODIX_GTX9896_I2C=y" out/.config || { echo "TOUCH DRIVER (GTX9896_I2C) NOT ENABLED"; exit 1; }
           grep -E "GTX9896|TOUCH_GAMEMODE" out/.config
