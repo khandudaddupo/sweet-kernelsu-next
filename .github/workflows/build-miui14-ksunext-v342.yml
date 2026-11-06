@@ -162,7 +162,7 @@ jobs:
           REL=$(cat out/include/config/kernel.release)
           echo "kernel.release = $REL"
           [ "$REL" = "4.14.190-perf-g019d15b3d168" ] || { echo "release string does not match stock"; exit 1; }
-          grep -q "KernelSU-Next version: 33355" "$W/build.log" || { echo "DRIVER VERSION MISMATCH (must be 33355)"; exit 1; }
+          grep -q "KernelSU-Next version override: 33355" "$W/build.log" || { echo "DRIVER VERSION MISMATCH (must be 33355)"; exit 1; }
           ls -la out/arch/arm64/boot/Image.gz
 
       - name: Package AnyKernel3 (replaces only the kernel in stock MIUI boot; keeps ramdisk+dtb)
