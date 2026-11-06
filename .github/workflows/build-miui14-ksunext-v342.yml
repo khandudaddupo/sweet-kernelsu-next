@@ -138,7 +138,7 @@ jobs:
             CLANG_TRIPLE=aarch64-linux-gnu- \
             CROSS_COMPILE=$W/tc64/aarch64-linux-android- \
             CROSS_COMPILE_ARM32=$W/tc32/arm-linux-androideabi- \
-            KCFLAGS=-Wno-error \
+            KCFLAGS=-Wno-error LOCALVERSION= \
             KSU_VERSION_OVERRIDE=33355"
           mkdir -p out
           cp "$W/configs/miui14_stock.config" out/.config
