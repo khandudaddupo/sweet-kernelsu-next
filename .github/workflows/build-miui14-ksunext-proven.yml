@@ -57,14 +57,20 @@ jobs:
           python3 "$GITHUB_WORKSPACE/scripts/ksu_legacy_manual_hooks_v2.py"
           # manager chicken-and-egg bootstrap (ported from proven Sep build; both get_info variants)
           python3 "$GITHUB_WORKSPACE/scripts/ksu_bootstrap_patches.py" KernelSU-Next/kernel/supercall
+          # make injected init.rc RC async (exec_start) so init does NOT block on ksud services daemon
+          sed -i 's/exec u:r:/exec_start u:r:/g' KernelSU-Next/kernel/runtime/ksud_integration.c
+          grep -c "exec_start u:r:" KernelSU-Next/kernel/runtime/ksud_integration.c
+          grep -q "BOOTSTRAP" KernelSU-Next/kernel/supercall/perm.c && echo "perm bootstrap OK"
+          grep -q "BOOTSTRAP_GET_INFO" KernelSU-Next/kernel/supercall/dispatch.c && echo "getinfo bootstrap OK"
+          # add sys_read hook (init.rc fops proxy -> injects RC that starts ksud at boot)
+          python3 "$GITHUB_WORKSPACE/scripts/insert_sysread_hook.py"
           # sanity: every hook call site must exist in the kernel source
           grep -q "ksu_handle_sys_reboot(magic1" kernel/reboot.c && echo "hook reboot OK"
+          grep -q "ksu_handle_sys_read(fd)" fs/read_write.c && echo "hook sys_read OK"
           grep -q "ksu_handle_execveat_sucompat(&fd" fs/exec.c && echo "hook execveat_sucompat OK"
           grep -q "ksu_handle_faccessat(&dfd" fs/open.c && echo "hook faccessat OK"
           grep -q "ksu_handle_stat(&dfd" fs/stat.c && echo "hook stat OK"
           grep -q "ksu_handle_setresuid(ruid" kernel/sys.c && echo "hook setresuid OK"
-          grep -q "BOOTSTRAP" KernelSU-Next/kernel/supercall/perm.c && echo "perm bootstrap OK"
-          grep -q "BOOTSTRAP_GET_INFO" KernelSU-Next/kernel/supercall/dispatch.c && echo "getinfo bootstrap OK"
 
       - name: Build kernel (proven config + only KSU version override)
         working-directory: kernel
