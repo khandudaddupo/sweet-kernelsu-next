@@ -77,6 +77,23 @@ V1_FUNC_BLOCK = re.compile(
 
 MARK = "/* KSU_LEGACY_MANUAL_HOOK2 */"
 
+# extra anchors for trees whose structure differs (e.g. PixelOS 4.14.357)
+HOOK_FALLBACKS = {
+    "fs/exec.c": [
+        HOOKS[1]["matches"],
+        r"static int __do_execve_file\((?:int )?(?:fd|dfd), struct filename \*filename,",
+        r"int do_execveat_common\((?:int )?(?:fd|dfd), struct filename \*filename,",
+    ],
+    "fs/open.c": [
+        HOOKS[2]["matches"],
+        r"int do_faccessat\((?:int )?(?:dfd|dirfd), const char __user \*filename, int mode",
+    ],
+    "kernel/sys.c": [
+        HOOKS[4]["matches"],
+        r"long __sys_setresuid\((?:uid_t )?ruid, (?:uid_t )?euid, (?:uid_t )?suid\)",
+    ],
+}
+
 def clean_v1():
     for f in V1_MARKER_FILES:
         try:
@@ -95,7 +112,11 @@ def process(h):
     if MARK in s:
         print(f"[skip] {path}: already patched (v2)")
         return None
-    m = re.search(h["matches"], s)
+    m = None
+    for pat in HOOK_FALLBACKS.get(path, [h["matches"]]):
+        m = re.search(pat, s)
+        if m:
+            break
     if not m:
         return f"{path}: function signature not found"
     brace = s.find("{", m.end())
