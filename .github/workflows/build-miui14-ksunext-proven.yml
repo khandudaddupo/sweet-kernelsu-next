@@ -49,6 +49,10 @@ jobs:
           python3 "$GITHUB_WORKSPACE/scripts/ksu_v342_compat.py" KernelSU-Next/kernel
           python3 "$GITHUB_WORKSPACE/scripts/backport_path_umount.py"
           python3 "$GITHUB_WORKSPACE/scripts/ksu_legacy_manual_hooks_v2.py"
+          # manager chicken-and-egg bootstrap (ported from proven Sep build; both get_info variants)
+          python3 "$GITHUB_WORKSPACE/scripts/ksu_bootstrap_patches.py" KernelSU-Next/kernel/supercall
+          grep -q "BOOTSTRAP" KernelSU-Next/kernel/supercall/perm.c && echo "perm bootstrap OK"
+          grep -q "BOOTSTRAP_GET_INFO" KernelSU-Next/kernel/supercall/dispatch.c && echo "getinfo bootstrap OK"
 
       - name: Build kernel (proven config + only KSU version override)
         working-directory: kernel
