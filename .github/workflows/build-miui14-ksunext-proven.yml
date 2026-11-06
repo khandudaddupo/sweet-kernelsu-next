@@ -43,6 +43,12 @@ jobs:
         working-directory: kernel
         run: |
           curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/v3.4.0-legacy/kernel/setup.sh" | bash -s v3.4.0-legacy
+          # uapi 4->5 bump: legacy tree ABI matches v3.4.2 manager (additive only,
+          # struct layouts identical; manager ksud 3.4.2 reports uapi 5).
+          # Unknown uapi-5 events (EVENT_SERVICES) hit the dispatcher default
+          # branch and are ignored safely.
+          sed -i 's/#define KERNEL_SU_UAPI_VERSION 4/#define KERNEL_SU_UAPI_VERSION 5/' KernelSU-Next/uapi/supercall.h
+          grep -q "KERNEL_SU_UAPI_VERSION 5" KernelSU-Next/uapi/supercall.h && echo "uapi bumped to 5"
           ln -sf ../KernelSU-Next/kernel drivers/kernelsu
           grep -q kernelsu drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
           grep -q "drivers/kernelsu/Kconfig" drivers/Kconfig || echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
