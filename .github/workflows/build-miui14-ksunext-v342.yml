@@ -57,7 +57,7 @@ jobs:
       - name: Integrate KernelSU-Next v3.4.0-legacy (manual-hook tree)
         working-directory: kernel
         run: |
-          curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/main/kernel/setup.sh" | bash -s v3.4.0-legacy
+          curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/v3.4.0-legacy/kernel/setup.sh" | bash -s v3.4.0-legacy
           grep -q kernelsu drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
           grep -q "drivers/kernelsu/Kconfig" drivers/Kconfig || echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
           # sanity: legacy tree must not depend on KPROBES after compat patch
