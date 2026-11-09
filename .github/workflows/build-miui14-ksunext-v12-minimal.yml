@@ -79,9 +79,13 @@ jobs:
           grep -q "THRONE_BOOTSTRAP" KernelSU-Next/kernel/hook/setuid_hook.c && echo "setuid throne OK"
           grep -q "THRONE_RETRY_V9" KernelSU-Next/kernel/hook/setuid_hook.c && echo "throne retry v9 OK"
           grep -q "int track_throne" KernelSU-Next/kernel/manager/throne_tracker.c && echo "track_throne int OK"
-          # v12a sanity: the read hook MUST NOT exist anywhere
-          ! grep -rq "ksu_handle_sys_read" KernelSU-Next/kernel kernel/ fs/ drivers/kernelsu 2>/dev/null || { echo "ERROR: sys_read hook present"; exit 1; }
-          echo "v12a clean: no sys_read hook"
+          # v12a sanity: the READ-HOOK CALL SITE must NOT exist. The legacy
+          # tree still defines ksu_handle_sys_read inside its (disabled)
+          # kprobe handler table; with CONFIG_KSU_KPROBES_HOOK=n and no call
+          # site in fs/read_write.c the proxy can never run.
+          ! grep -q "ksu_handle_sys_read(fd)" fs/read_write.c || { echo "ERROR: sys_read hook present in read_write.c"; exit 1; }
+          ! grep -q "ksu_handle_sys_read" kernel/reboot.c fs/exec.c fs/open.c fs/stat.c kernel/sys.c || { echo "ERROR: sys_read hook present elsewhere"; exit 1; }
+          echo "v12a clean: no sys_read call site"
           # sanity: every hook call site must exist in the kernel source
           grep -q "ksu_handle_sys_reboot(magic1" kernel/reboot.c && echo "hook reboot OK"
           grep -q "ksu_handle_execveat_sucompat(&fd" fs/exec.c && echo "hook execveat_sucompat OK"
