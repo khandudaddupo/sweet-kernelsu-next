@@ -1,0 +1,172 @@
+name: Build sweet MIUI14 KSU-Next v3.4.0-legacy v7 SELINUX EARLY SETUP (driver 33355)
+
+# v11-LOOPBREAK (final): v10 stack + no-exec wait delay + bootloop-breaker = v8 + THRONE RETRY (ENOENT=free retry; PMS writes packages.list seconds after first spawn)
+#   + FIXED init.rc (async service defs; old exec_start was a silent no-op).
+#   execveat_ksud is intentionally NOT hooked on this device (crash), so
+#   upstream's execve-based second-stage detection never runs and
+#   apply_kernelsu_rules/cache_sid/setup_ksu_cred never execute. ksu_cred
+#   keeps the initial kernel SID => every ksu_cred file access is
+#   SELinux-denied => throne search can't read packages.list or /data/app
+#   => manager never crowned => setresuid hook never installs the driver
+#   fd => manager stays seccomp-blocked ("Unsupported").
+#   Fix: init reads init.rc AFTER selinux_load_policy and BEFORE any app
+#   spawn — run the three setup calls there (manual-hook builds only).
+#   Plus v6: on_post_fs_data track_throne(false) + bounded setresuid retry.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 180
+    steps:
+      - name: Checkout build repo
+        uses: actions/checkout@v4
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bc bison build-essential ccache cpio flex git libelf-dev libncurses-dev libssl-dev lz4 python3 schedtool xsltproc zip zlib1g-dev libxml2-utils aria2
+
+      - name: Toolchains (ZyCromerZ Clang 17 + greenforce GCC — the proven combo)
+        run: |
+          mkdir -p clang
+          aria2c -q -s 16 -x 16 "https://github.com/ZyCromerZ/Clang/releases/download/17.0.0-20230725-release/Clang-17.0.0-20230725.tar.gz" -o clang.tar.gz
+          tar -xzf clang.tar.gz -C clang/
+          rm -f clang.tar.gz
+          git clone --depth=1 https://github.com/greenforce-project/gcc-arm64 -b main gcc64
+          git clone --depth=1 https://github.com/greenforce-project/gcc-arm -b main gcc32
+          ls clang/bin/clang gcc64/bin/aarch64-elf-ld gcc32/bin/arm-none-eabi-gcc
+
+      - name: Clone Kernel Source (PixelOS sm6150 seventeen — same source as the kernel that booted this phone)
+        run: |
+          git clone --depth=1 -b seventeen https://github.com/PixelOS-Devices/android_kernel_xiaomi_sm6150.git kernel
+          grep -E "^(VERSION|PATCHLEVEL|SUBLEVEL|EXTRAVERSION)" kernel/Makefile | head -4
+          ls kernel/arch/arm64/configs/ | grep -E "sweet" | head -3
+
+      - name: Integrate KernelSU-Next v3.4.0-legacy + v2 safe hooks (boot-proven)
+        working-directory: kernel
+        run: |
+          curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/v3.4.0-legacy/kernel/setup.sh" | bash -s v3.4.0-legacy
+          # uapi 4->5 bump: legacy tree ABI matches v3.4.2 manager (additive only,
+          # struct layouts identical; manager ksud 3.4.2 reports uapi 5).
+          sed -i 's/#define KERNEL_SU_UAPI_VERSION 4/#define KERNEL_SU_UAPI_VERSION 5/' KernelSU-Next/uapi/supercall.h
+          grep -q "KERNEL_SU_UAPI_VERSION 5" KernelSU-Next/uapi/supercall.h && echo "uapi bumped to 5"
+          ln -sf ../KernelSU-Next/kernel drivers/kernelsu
+          grep -q kernelsu drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
+          grep -q "drivers/kernelsu/Kconfig" drivers/Kconfig || echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
+          python3 "$GITHUB_WORKSPACE/scripts/ksu_v342_compat.py" KernelSU-Next/kernel
+          python3 "$GITHUB_WORKSPACE/scripts/backport_path_umount.py"
+          python3 "$GITHUB_WORKSPACE/scripts/ksu_legacy_manual_hooks_v2.py"
+          # manager chicken-and-egg bootstrap (ported from proven Sep build; both get_info variants)
+          python3 "$GITHUB_WORKSPACE/scripts/ksu_bootstrap_patches.py" KernelSU-Next/kernel/supercall
+          # v6 THRONE BOOTSTRAP: crown the manager on every boot + bounded
+          # retry on app spawns while manager_appid is invalid
+          python3 "$GITHUB_WORKSPACE/scripts/ksu_throne_bootstrap.py"
+          # v7 SELINUX EARLY SETUP: apply ksu rules + setup ksu_cred when init
+          # reads init.rc (policy loaded, no apps spawned yet)
+          python3 "$GITHUB_WORKSPACE/scripts/ksu_selinux_early_setup.py"
+          # v9 THRONE RETRY: -ENOENT attempts are free (packages.list is written
+          # seconds after the first spawn); cap only real failed searches
+          python3 "$GITHUB_WORKSPACE/scripts/ksu_throne_retry_v9.py"
+          # v9 RC FIX: exec_start needs a service NAME (old form was a silent
+          # no-op) — define oneshot services started with `start` (non-blocking)
+          sed -i 's/exec u:r:/exec_start u:r:/g' KernelSU-Next/kernel/runtime/ksud_integration.c
+          python3 "$GITHUB_WORKSPACE/scripts/ksu_fix_init_rc.py"
+          grep -q "ksu_pfsd" KernelSU-Next/kernel/runtime/ksud_integration.c && echo "rc fix pre-check OK"
+          grep -q "BOOTSTRAP" KernelSU-Next/kernel/supercall/perm.c && echo "perm bootstrap OK"
+          grep -q "BOOTSTRAP_GET_INFO" KernelSU-Next/kernel/supercall/dispatch.c && echo "getinfo bootstrap OK"
+          grep -q "THRONE_BOOTSTRAP" KernelSU-Next/kernel/runtime/boot_event.c && echo "boot_event throne OK"
+          grep -q "THRONE_BOOTSTRAP" KernelSU-Next/kernel/hook/setuid_hook.c && echo "setuid throne OK"
+          grep -q "SELINUX_EARLY_SETUP" KernelSU-Next/kernel/runtime/ksud_integration.c && echo "selinux early setup OK"
+          grep -q "THRONE_RETRY_V9" KernelSU-Next/kernel/hook/setuid_hook.c && echo "throne retry v9 OK"
+          grep -q "int track_throne" KernelSU-Next/kernel/manager/throne_tracker.c && echo "track_throne int OK"
+          grep -q "ksu_pfsd" KernelSU-Next/kernel/runtime/ksud_integration.c && echo "rc service fix OK"
+          # v11 FINAL DELAY: no-exec wait-builtin delay + bootloop breaker
+          python3 "$GITHUB_WORKSPACE/scripts/ksu_zygote_delay_v11.py"
+          grep -q "zn_delay_never" KernelSU-Next/kernel/runtime/ksud_integration.c && echo "v11 final delay OK"
+          # add sys_read hook (init.rc fops proxy -> injects RC that starts ksud at boot)
+          python3 "$GITHUB_WORKSPACE/scripts/insert_sysread_hook.py"
+          # sanity: every hook call site must exist in the kernel source
+          grep -q "ksu_handle_sys_reboot(magic1" kernel/reboot.c && echo "hook reboot OK"
+          grep -q "ksu_handle_sys_read(fd)" fs/read_write.c && echo "hook sys_read OK"
+          grep -q "ksu_handle_execveat_sucompat(&fd" fs/exec.c && echo "hook execveat_sucompat OK"
+          grep -q "ksu_handle_faccessat(&dfd" fs/open.c && echo "hook faccessat OK"
+          grep -q "ksu_handle_stat(&dfd" fs/stat.c && echo "hook stat OK"
+          grep -q "ksu_handle_setresuid(ruid" kernel/sys.c && echo "hook setresuid OK"
+
+      - name: Build kernel (proven config + only KSU version override)
+        working-directory: kernel
+        run: |
+          set -o pipefail
+          export ARCH=arm64 SUBARCH=arm64
+          export PATH="$GITHUB_WORKSPACE/clang/bin:$GITHUB_WORKSPACE/gcc64/bin:$GITHUB_WORKSPACE/gcc32/bin:$PATH"
+          clang --version | head -1
+          export KBUILD_BUILD_USER=sikandar KBUILD_BUILD_HOST=sweet-kernelsu
+          cp "$GITHUB_WORKSPACE/configs/ksu_next_working.config" out_base.config
+          mkdir -p out
+          cp out_base.config out/.config
+          ./scripts/config --file out/.config \
+            -e CONFIG_KSU -e CONFIG_KSU_MANUAL_HOOK -e CONFIG_KSU_DEBUG \
+            -d CONFIG_KSU_KPROBES_HOOK
+          make O=out ARCH=arm64 olddefconfig
+          echo "=== CRITICAL VERIFY ==="
+          grep -E "^CONFIG_KSU(|=)" out/.config || { echo "CONFIG_KSU MISSING"; exit 1; }
+          grep -q "^CONFIG_KSU=y" out/.config || { echo "CONFIG_KSU NOT y"; exit 1; }
+          grep -q "^CONFIG_KSU_MANUAL_HOOK=y" out/.config || { echo "MANUAL_HOOK NOT y"; exit 1; }
+          if grep -q "^CONFIG_KPROBES=y" out/.config; then echo "KPROBES must stay off (struct module compat)"; exit 1; fi
+          make -j$(nproc) O=out ARCH=arm64 \
+            LLVM=1 LLVM_IAS=1 \
+            CC=clang \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            CROSS_COMPILE=$GITHUB_WORKSPACE/gcc64/bin/aarch64-elf- \
+            CROSS_COMPILE_ARM32=$GITHUB_WORKSPACE/gcc32/bin/arm-none-eabi- \
+            KCFLAGS=-Wno-error \
+            KSU_VERSION_OVERRIDE=33355 \
+            Image.gz 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
+          test -f out/arch/arm64/boot/Image.gz || { echo "Image.gz missing"; exit 1; }
+          ls -la out/arch/arm64/boot/Image.gz
+          grep -q "KernelSU-Next version override: 33355" "$GITHUB_WORKSPACE/build.log" || { echo "DRIVER VERSION MISMATCH (must be 33355)"; exit 1; }
+          echo "KernelSU-Next: Hook mode: Manual — check:"; grep "Hook mode" "$GITHUB_WORKSPACE/build.log" | head -1
+          grep -q "Hook mode: Manual" "$GITHUB_WORKSPACE/build.log" || { echo "MANUAL HOOK MODE NOT ACTIVE"; exit 1; }
+          grep -q "Manager signature hash: 79e590113c4c4c0c222978e413a5faa801666957b1212a328e46c00c69821bf7" "$GITHUB_WORKSPACE/build.log" || { echo "MANAGER SIGNATURE HASH UNEXPECTED"; exit 1; }
+
+      - name: Package AnyKernel3 (kernel-only swap; stock MIUI ramdisk+dtb preserved)
+        run: |
+          set -e
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3 AK3
+          rm -rf AK3/.git
+          cp kernel/out/arch/arm64/boot/Image.gz AK3/Image.gz
+          cat > AK3/anykernel.sh <<'AKEOF'
+          properties() { '
+          kernel.string=sweet MIUI14 KSU-Next v3.4.0-legacy v11-final auto-crown (33355)
+          do.devicecheck=1
+          do.modules=0
+          do.systemless=1
+          do.cleanup=1
+          do.cleanuponabort=1
+          device.name1=sweet
+          device.name2=sweetin
+          '; }
+          BLOCK=/dev/block/bootdevice/by-name/boot;
+          IS_SLOT_DEVICE=0;
+          RAMDISK_COMPRESSION=auto;
+          PATCH_VBMETA_FLAG=auto;
+          . tools/ak3-core.sh;
+          split_boot;
+          flash_boot;
+          AKEOF
+          cd AK3 && zip -r9 "../sweet-miui14-ksunext-v11-final.zip" * -x .git\* README.md && cd ..
+          mkdir -p artifact
+          cp sweet-miui14-ksunext-v11-final.zip artifact/
+          cp kernel/out/.config artifact/kernel_config_used
+          cp "$GITHUB_WORKSPACE/build.log" artifact/ || true
+          echo "PixelOS sm6150 seventeen + proven config + KSU v3.4.0-legacy (override 33355) manual hooks v2 + THRONE BOOTSTRAP + SELINUX EARLY SETUP; ZyCromerZ clang17 + greenforce gcc; LLVM=1" > artifact/build-info.txt
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sweet-miui14-ksunext-v11-final
+          path: artifact/
+          retention-days: 30
